@@ -47,13 +47,15 @@ $nvccPath = $nvcc.Source
 & $nvccPath `
     -std=c++14 `
     "-arch=$Arch" `
-    -Xcompiler /utf-8 `
+    -O3 `
+    -DNDEBUG `
+    -Xcompiler /utf-8,/O2 `
     -ccbin $ccbin `
-    main.cu bruteforce.cu `
+    main.cu bruteforce.cu config.cpp `
     -o $Out
 
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "Built $Out for $Arch"
+Write-Host "Built release $Out for $Arch"
