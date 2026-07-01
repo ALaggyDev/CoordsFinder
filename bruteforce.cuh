@@ -30,6 +30,8 @@ constexpr unsigned int XzRotationMask270 = 1u << XzRotation270;
 constexpr unsigned int XzRotationMaskAll =
     XzRotationMask0 | XzRotationMask90 | XzRotationMask180 | XzRotationMask270;
 
+constexpr int MaxFilterCount = 256;
+
 // XZ rotations are clockwise on a top-down Minecraft map where +X is east/right
 // and +Z is south/down. For example, 90 degrees maps local +X to world +Z.
 inline Int2 rotateXzOffset(int x, int z, int rotation)
@@ -69,12 +71,13 @@ struct RotationInfo {
     }
 };
 
-cudaError_t initFilter(int xzRotation);
+cudaError_t initFilter(int xzRotation, const RotationInfo* hostFilter, int filterCount);
 
 cudaError_t launchBruteForce(
     TextureMode mode,
     Int3 start,
     Int3 endInclusive,
     int maxBadBlocks,
+    int filterCount,
     dim3 grid,
     dim3 block);

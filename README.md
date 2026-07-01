@@ -2,11 +2,14 @@
 
 CUDA brute-force scanner for matching Minecraft block model texture variants at candidate coordinates.
 
-The filter is defined in `bruteforce.cu` as a list of `RotationInfo` entries:
+The scan bounds, texture mode, rotations, and filter rows are loaded from a config file.
+`coordsfinder.conf` is ignored by Git, and `coordsfinder.example.conf` is the tracked starting point.
 
-```cpp
-RotationInfo(x, y, z, variant)
-RotationInfo(x, y, z, variant, true) // side-face check
+Filter rows use this format:
+
+```text
+x y z | variant
+x y z | variant side
 ```
 
 Normal checks compare the selected four-state model variant directly. Side checks still sample Minecraft's four model variants, then fold them to two visible side states.
@@ -28,17 +31,31 @@ The script produces `scanner-win.exe`.
 
 ## Run
 
-Edit `ScanConfig` in `main.cu` to change the search bounds, texture mode, and maximum bad blocks. Then run:
+Copy the example config once, then edit your local ignored config:
+
+```powershell
+Copy-Item coordsfinder.example.conf coordsfinder.conf
+```
+
+Run with the default config:
 
 ```powershell
 .\scanner-win.exe
 ```
 
-`ScanConfig::xzRotationMask` controls which world XZ facings are searched:
+Or pass a config path explicitly:
 
-```cpp
-unsigned int xzRotationMask = XzRotationMask0 | XzRotationMask180;
-unsigned int xzRotationMask = XzRotationMaskAll;
+```powershell
+.\scanner-win.exe .\some-other-config.conf
+```
+
+If `coordsfinder.conf` does not exist, the scanner falls back to `coordsfinder.example.conf`.
+
+`xzRotations` controls which world XZ facings are searched:
+
+```ini
+xzRotations = 0,180
+xzRotations = all
 ```
 
 Each selected rotation prepares a rotated filter on the CPU, copies it to the GPU, then runs a separate full brute-force pass.

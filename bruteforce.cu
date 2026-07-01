@@ -6,55 +6,18 @@
 #include "bruteforce.cuh"
 #include "textures.cuh"
 
-const RotationInfo host_filter[] = {
-    // (353, -60, -53)
-    RotationInfo(-1, 0, 0, 3),
-    RotationInfo(-2, 0, 0, 1),
-    RotationInfo(-3, 0, 0, 2),
-    RotationInfo(-4, 0, 0, 0),
-    RotationInfo(-1, 0, 1, 0),
-    RotationInfo(-2, 0, 1, 0),
-    RotationInfo(-3, 0, 1, 1),
-    RotationInfo(-4, 0, 1, 0),
-    RotationInfo(0, 0, 0, 0, true),
-    RotationInfo(1, 0, 0, 0, true),
-    RotationInfo(2, 0, 0, 0, true),
-    RotationInfo(3, 0, 0, 1, true),
-    RotationInfo(0, 1, 0, 0, true),
-    RotationInfo(1, 1, 0, 1, true),
-    RotationInfo(2, 1, 0, 0, true),
-    RotationInfo(3, 1, 0, 0, true),
-    RotationInfo(0, 2, 0, 0, true),
-    RotationInfo(1, 2, 0, 1, true),
-    RotationInfo(2, 2, 0, 0, true),
-    RotationInfo(3, 2, 0, 1, true),
-    RotationInfo(0, 3, 0, 0, true),
-    RotationInfo(1, 3, 0, 1, true),
-    RotationInfo(2, 3, 0, 1, true),
-    RotationInfo(3, 3, 0, 1, true),
+__device__ __constant__ RotationInfo dev_filter[MaxFilterCount];
 
-    // (339, -57, -55)
-    // RotationInfo(0, 0, 0, 1),
-    // RotationInfo(1, 0, 0, 2),
-    // RotationInfo(2, 0, 0, 0),
-    // RotationInfo(0, 0, 1, 3),
-    // RotationInfo(1, 0, 1, 0),
-    // RotationInfo(2, 0, 1, 3),
-    // RotationInfo(0, 0, 2, 0),
-    // RotationInfo(1, 0, 2, 1),
-    // RotationInfo(2, 0, 2, 1),
-};
-
-constexpr int FilterCount = sizeof(host_filter) / sizeof(RotationInfo);
-
-__device__ __constant__ RotationInfo dev_filter[FilterCount];
-
-cudaError_t initFilter(int xzRotation)
+cudaError_t initFilter(int xzRotation, const RotationInfo* hostFilter, int filterCount)
 {
-    RotationInfo rotatedFilter[FilterCount];
+    if (filterCount < 0 || filterCount > MaxFilterCount) {
+        return cudaErrorInvalidValue;
+    }
 
-    for (int i = 0; i < FilterCount; i++) {
-        RotationInfo info = host_filter[i];
+    RotationInfo rotatedFilter[MaxFilterCount];
+
+    for (int i = 0; i < filterCount; i++) {
+        RotationInfo info = hostFilter[i];
         const Int2 rotatedOffset = rotateXzOffset(info.x, info.z, xzRotation);
 
         info.x = static_cast<char>(rotatedOffset.x);
@@ -63,11 +26,11 @@ cudaError_t initFilter(int xzRotation)
         rotatedFilter[i] = info;
     }
 
-    return cudaMemcpyToSymbol(dev_filter, rotatedFilter, sizeof(rotatedFilter));
+    return cudaMemcpyToSymbol(dev_filter, rotatedFilter, sizeof(RotationInfo) * filterCount);
 }
 
 template <TextureMode Mode>
-__global__ void bruteForceKernel(Int3 start, Int3 endInclusive, int maxBadBlocks)
+__global__ void bruteForceKernel(Int3 start, Int3 endInclusive, int maxBadBlocks, int filterCount)
 {
     const int x = blockIdx.x * blockDim.x + threadIdx.x + start.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y + start.y;
@@ -79,8 +42,7 @@ __global__ void bruteForceKernel(Int3 start, Int3 endInclusive, int maxBadBlocks
 
     int badBlocks = 0;
 
-#pragma unroll
-    for (int i = 0; i < FilterCount; i++) {
+    for (int i = 0; i < filterCount; i++) {
         const RotationInfo info = dev_filter[i];
         const char textureVariant = getTextureForMode<Mode>(x + info.x, y + info.y, z + info.z, 4);
         const char texture = textureVariant & info.visibleMask;
@@ -101,25 +63,26 @@ cudaError_t launchBruteForce(
     Int3 start,
     Int3 endInclusive,
     int maxBadBlocks,
+    int filterCount,
     dim3 grid,
     dim3 block)
 {
     switch (mode) {
     case TextureModeVanilla12:
-        bruteForceKernel<TextureModeVanilla12><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        bruteForceKernel<TextureModeVanilla12><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
     case TextureModeVanilla:
-        bruteForceKernel<TextureModeVanilla><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        bruteForceKernel<TextureModeVanilla><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
     case TextureModeVanilla21_1:
-        bruteForceKernel<TextureModeVanilla21_1><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        bruteForceKernel<TextureModeVanilla21_1><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
     case TextureModeSodium:
-        bruteForceKernel<TextureModeSodium><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        bruteForceKernel<TextureModeSodium><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
     case TextureModeSodium19:
     default:
-        bruteForceKernel<TextureModeSodium19><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        bruteForceKernel<TextureModeSodium19><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
     }
 

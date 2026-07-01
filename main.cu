@@ -5,27 +5,11 @@
 #include "device_launch_parameters.h"
 
 #include "bruteforce.cuh"
+#include "config.hpp"
 #include "textures.cuh"
 
 namespace {
 constexpr int ThreadsPerAxis = 8;
-
-struct ScanConfig {
-    TextureMode mode = TextureModeVanilla;
-
-    int xStart = -100000;
-    int xEnd = 100000;
-    int yStart = -60;
-    int yEnd = 0;
-    int zStart = -5000;
-    int zEnd = 5000;
-
-    int chunkBlocksX = 16384;
-    int chunkBlocksZ = 64;
-    int maxBadBlocks = 0;
-    unsigned int xzRotationMask = XzRotationMask0;
-    bool printChunks = true;
-};
 
 int ceilDiv(int value, int divisor)
 {
@@ -89,6 +73,7 @@ cudaError_t launchChunk(const ScanConfig& config, Int3 start, Int3 end)
         start,
         end,
         config.maxBadBlocks,
+        static_cast<int>(config.filter.size()),
         grid,
         block);
     if (err != cudaSuccess) {
@@ -99,15 +84,28 @@ cudaError_t launchChunk(const ScanConfig& config, Int3 start, Int3 end)
 }
 }
 
-int main()
+int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 
-    const ScanConfig config;
+    if (argc > 2) {
+        fprintf(stderr, "Usage: %s [config-file]\n", argv[0]);
+        return 1;
+    }
+
+    ScanConfig config;
+    std::string configError;
+    if (!loadScanConfig(argc == 2 ? argv[1] : nullptr, &config, &configError)) {
+        fprintf(stderr, "Config error: %s\n", configError.c_str());
+        return 1;
+    }
 
     cudaError_t err = cudaSuccess;
 
+    printf("Loaded config from %s%s.\n",
+        config.sourcePath.c_str(),
+        config.usedFallback ? " (fallback)" : "");
     printf("Scanning %s rotations from (%d, %d, %d) to (%d, %d, %d).\n",
         textureModeName(config.mode),
         config.xStart,
@@ -119,6 +117,7 @@ int main()
     printf("Selected XZ rotations: ");
     printSelectedXzRotations(config.xzRotationMask);
     printf(" degrees.\n");
+    printf("Number of filters: %d.\n", static_cast<int>(config.filter.size()));
 
     const int chunkSizeX = config.chunkBlocksX * ThreadsPerAxis;
     const int chunkSizeZ = config.chunkBlocksZ * ThreadsPerAxis;
@@ -130,7 +129,7 @@ int main()
 
         printf("Scanning XZ rotation %d degrees.\n", xzRotation * 90);
 
-        err = initFilter(xzRotation);
+        err = initFilter(xzRotation, config.filter.data(), static_cast<int>(config.filter.size()));
         if (err != cudaSuccess) {
             fprintf(stderr, "cudaMemcpyToSymbol failed: %s\n", cudaGetErrorString(err));
             return 1;
