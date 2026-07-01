@@ -49,9 +49,21 @@ constexpr int FilterCount = sizeof(host_filter) / sizeof(RotationInfo);
 
 __device__ __constant__ RotationInfo dev_filter[FilterCount];
 
-cudaError_t initFilter()
+cudaError_t initFilter(int xzRotation)
 {
-    return cudaMemcpyToSymbol(dev_filter, host_filter, sizeof(host_filter));
+    RotationInfo rotatedFilter[FilterCount];
+
+    for (int i = 0; i < FilterCount; i++) {
+        RotationInfo info = host_filter[i];
+        const Int2 rotatedOffset = rotateXzOffset(info.x, info.z, xzRotation);
+
+        info.x = static_cast<char>(rotatedOffset.x);
+        info.z = static_cast<char>(rotatedOffset.z);
+        info.rotation = static_cast<char>((info.rotation + xzRotation) & info.visibleMask);
+        rotatedFilter[i] = info;
+    }
+
+    return cudaMemcpyToSymbol(dev_filter, rotatedFilter, sizeof(rotatedFilter));
 }
 
 template <TextureMode Mode>
@@ -84,7 +96,13 @@ __global__ void bruteForceKernel(Int3 start, Int3 endInclusive, int maxBadBlocks
     printf("Found with %d bad block(s)! (%d, %d, %d)\n", badBlocks, x, y, z);
 }
 
-cudaError_t launchBruteForce(TextureMode mode, Int3 start, Int3 endInclusive, int maxBadBlocks, dim3 grid, dim3 block)
+cudaError_t launchBruteForce(
+    TextureMode mode,
+    Int3 start,
+    Int3 endInclusive,
+    int maxBadBlocks,
+    dim3 grid,
+    dim3 block)
 {
     switch (mode) {
     case TextureModeVanilla12:

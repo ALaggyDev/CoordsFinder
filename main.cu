@@ -23,6 +23,7 @@ struct ScanConfig {
     int chunkBlocksX = 16384;
     int chunkBlocksZ = 64;
     int maxBadBlocks = 0;
+    unsigned int xzRotationMask = XzRotationMask0;
     bool printChunks = true;
 };
 
@@ -53,6 +54,24 @@ const char* textureModeName(TextureMode mode)
     }
 }
 
+void printSelectedXzRotations(unsigned int xzRotationMask)
+{
+    bool printed = false;
+
+    for (int rotation = 0; rotation < XzRotationCount; rotation++) {
+        if ((xzRotationMask & (1u << rotation)) == 0u) {
+            continue;
+        }
+
+        printf("%s%d", printed ? ", " : "", rotation * 90);
+        printed = true;
+    }
+
+    if (!printed) {
+        printf("none");
+    }
+}
+
 cudaError_t launchChunk(const ScanConfig& config, Int3 start, Int3 end)
 {
     const int xCount = end.x - start.x + 1;
@@ -65,7 +84,13 @@ cudaError_t launchChunk(const ScanConfig& config, Int3 start, Int3 end)
         ceilDiv(zCount, ThreadsPerAxis));
     const dim3 block(ThreadsPerAxis, ThreadsPerAxis, ThreadsPerAxis);
 
-    cudaError_t err = launchBruteForce(config.mode, start, end, config.maxBadBlocks, grid, block);
+    cudaError_t err = launchBruteForce(
+        config.mode,
+        start,
+        end,
+        config.maxBadBlocks,
+        grid,
+        block);
     if (err != cudaSuccess) {
         return err;
     }
@@ -81,11 +106,7 @@ int main()
 
     const ScanConfig config;
 
-    cudaError_t err = initFilter();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpyToSymbol failed: %s\n", cudaGetErrorString(err));
-        return 1;
-    }
+    cudaError_t err = cudaSuccess;
 
     printf("Scanning %s rotations from (%d, %d, %d) to (%d, %d, %d).\n",
         textureModeName(config.mode),
@@ -95,33 +116,50 @@ int main()
         config.xEnd,
         config.yEnd,
         config.zEnd);
+    printf("Selected XZ rotations: ");
+    printSelectedXzRotations(config.xzRotationMask);
+    printf(" degrees.\n");
 
     const int chunkSizeX = config.chunkBlocksX * ThreadsPerAxis;
     const int chunkSizeZ = config.chunkBlocksZ * ThreadsPerAxis;
 
-    for (int z = config.zStart; z <= config.zEnd; z += chunkSizeZ) {
-        const int zEnd = minInt(z + chunkSizeZ - 1, config.zEnd);
+    for (int xzRotation = 0; xzRotation < XzRotationCount; xzRotation++) {
+        if ((config.xzRotationMask & (1u << xzRotation)) == 0u) {
+            continue;
+        }
 
-        for (int x = config.xStart; x <= config.xEnd; x += chunkSizeX) {
-            const int xEnd = minInt(x + chunkSizeX - 1, config.xEnd);
+        printf("Scanning XZ rotation %d degrees.\n", xzRotation * 90);
 
-            const Int3 start = { x, config.yStart, z };
-            const Int3 end = { xEnd, config.yEnd, zEnd };
+        err = initFilter(xzRotation);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "cudaMemcpyToSymbol failed: %s\n", cudaGetErrorString(err));
+            return 1;
+        }
 
-            if (config.printChunks) {
-                printf("Scanning chunk from (%d, %d, %d) to (%d, %d, %d).\n",
-                    start.x,
-                    start.y,
-                    start.z,
-                    end.x,
-                    end.y,
-                    end.z);
-            }
+        for (int z = config.zStart; z <= config.zEnd; z += chunkSizeZ) {
+            const int zEnd = minInt(z + chunkSizeZ - 1, config.zEnd);
 
-            err = launchChunk(config, start, end);
-            if (err != cudaSuccess) {
-                fprintf(stderr, "CUDA scan failed: %s\n", cudaGetErrorString(err));
-                return 1;
+            for (int x = config.xStart; x <= config.xEnd; x += chunkSizeX) {
+                const int xEnd = minInt(x + chunkSizeX - 1, config.xEnd);
+
+                const Int3 start = { x, config.yStart, z };
+                const Int3 end = { xEnd, config.yEnd, zEnd };
+
+                if (config.printChunks) {
+                    printf("Scanning chunk from (%d, %d, %d) to (%d, %d, %d).\n",
+                        start.x,
+                        start.y,
+                        start.z,
+                        end.x,
+                        end.y,
+                        end.z);
+                }
+
+                err = launchChunk(config, start, end);
+                if (err != cudaSuccess) {
+                    fprintf(stderr, "CUDA scan failed: %s\n", cudaGetErrorString(err));
+                    return 1;
+                }
             }
         }
     }
