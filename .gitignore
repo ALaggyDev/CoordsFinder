@@ -1,0 +1,10 @@
+*.exe
+*.exp
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.log
+log*.txt
+
+tmpxft_*
