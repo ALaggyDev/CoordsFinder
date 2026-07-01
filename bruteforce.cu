@@ -54,7 +54,8 @@ cudaError_t initFilter()
     return cudaMemcpyToSymbol(dev_filter, host_filter, sizeof(host_filter));
 }
 
-__global__ void bruteForce(TextureMode mode, Int3 start, Int3 endInclusive, int maxBadBlocks)
+template <TextureMode Mode>
+__global__ void bruteForceKernel(Int3 start, Int3 endInclusive, int maxBadBlocks)
 {
     const int x = blockIdx.x * blockDim.x + threadIdx.x + start.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y + start.y;
@@ -66,10 +67,11 @@ __global__ void bruteForce(TextureMode mode, Int3 start, Int3 endInclusive, int 
 
     int badBlocks = 0;
 
+#pragma unroll
     for (int i = 0; i < FilterCount; i++) {
         const RotationInfo info = dev_filter[i];
-        const char textureVariant = getTexture(mode, x + info.x, y + info.y, z + info.z, 4);
-        const char texture = info.isSide ? textureVariant % 2 : textureVariant;
+        const char textureVariant = getTextureForMode<Mode>(x + info.x, y + info.y, z + info.z, 4);
+        const char texture = textureVariant & info.visibleMask;
 
         if (texture != info.rotation) {
             badBlocks++;
@@ -80,4 +82,28 @@ __global__ void bruteForce(TextureMode mode, Int3 start, Int3 endInclusive, int 
     }
 
     printf("Found with %d bad block(s)! (%d, %d, %d)\n", badBlocks, x, y, z);
+}
+
+cudaError_t launchBruteForce(TextureMode mode, Int3 start, Int3 endInclusive, int maxBadBlocks, dim3 grid, dim3 block)
+{
+    switch (mode) {
+    case TextureModeVanilla12:
+        bruteForceKernel<TextureModeVanilla12><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        break;
+    case TextureModeVanilla:
+        bruteForceKernel<TextureModeVanilla><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        break;
+    case TextureModeVanilla21_1:
+        bruteForceKernel<TextureModeVanilla21_1><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        break;
+    case TextureModeSodium:
+        bruteForceKernel<TextureModeSodium><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        break;
+    case TextureModeSodium19:
+    default:
+        bruteForceKernel<TextureModeSodium19><<<grid, block>>>(start, endInclusive, maxBadBlocks);
+        break;
+    }
+
+    return cudaGetLastError();
 }

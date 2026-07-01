@@ -15,7 +15,7 @@ struct RotationInfo {
     char y;
     char z;
     char rotation;
-    bool isSide;
+    char visibleMask;
 
     constexpr RotationInfo(
         char vx = 0,
@@ -27,11 +27,11 @@ struct RotationInfo {
           y(vy),
           z(vz),
           rotation(static_cast<char>(vrotation % (visSide ? 2 : 4))),
-          isSide(visSide)
+          visibleMask(static_cast<char>(visSide ? 1 : 3))
     {
     }
 };
 
 cudaError_t initFilter();
 
-__global__ void bruteForce(TextureMode mode, Int3 start, Int3 endInclusive, int maxBadBlocks);
+cudaError_t launchBruteForce(TextureMode mode, Int3 start, Int3 endInclusive, int maxBadBlocks, dim3 grid, dim3 block);

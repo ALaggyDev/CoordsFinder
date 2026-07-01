@@ -47,10 +47,9 @@ $nvccPath = $nvcc.Source
 & $nvccPath `
     -std=c++14 `
     "-arch=$Arch" `
-    -rdc=true `
     -Xcompiler /utf-8 `
     -ccbin $ccbin `
-    main.cu bruteforce.cu textures.cu `
+    main.cu bruteforce.cu `
     -o $Out
 
 if ($LASTEXITCODE -ne 0) {

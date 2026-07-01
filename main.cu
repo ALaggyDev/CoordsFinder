@@ -13,16 +13,16 @@ constexpr int ThreadsPerAxis = 8;
 struct ScanConfig {
     TextureMode mode = TextureModeVanilla;
 
-    int xStart = -500;
-    int xEnd = 500;
+    int xStart = -100000;
+    int xEnd = 100000;
     int yStart = -60;
     int yEnd = 0;
-    int zStart = -500;
-    int zEnd = 500;
+    int zStart = -5000;
+    int zEnd = 5000;
 
     int chunkBlocksX = 16384;
     int chunkBlocksZ = 64;
-    int maxBadBlocks = 1;
+    int maxBadBlocks = 0;
     bool printChunks = true;
 };
 
@@ -65,8 +65,7 @@ cudaError_t launchChunk(const ScanConfig& config, Int3 start, Int3 end)
         ceilDiv(zCount, ThreadsPerAxis));
     const dim3 block(ThreadsPerAxis, ThreadsPerAxis, ThreadsPerAxis);
 
-    bruteForce<<<grid, block>>>(config.mode, start, end, config.maxBadBlocks);
-    cudaError_t err = cudaGetLastError();
+    cudaError_t err = launchBruteForce(config.mode, start, end, config.maxBadBlocks, grid, block);
     if (err != cudaSuccess) {
         return err;
     }

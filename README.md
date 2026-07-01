@@ -9,7 +9,7 @@ RotationInfo(x, y, z, variant)
 RotationInfo(x, y, z, variant, true) // side-face check
 ```
 
-Normal checks compare the selected four-state model variant directly. Side checks still sample Minecraft's four model variants, then fold them to two visible side states with `% 2`.
+Normal checks compare the selected four-state model variant directly. Side checks still sample Minecraft's four model variants, then fold them to two visible side states.
 
 ## Build on Windows
 
