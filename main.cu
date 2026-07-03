@@ -71,23 +71,21 @@ int main(int argc, char** argv)
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 
-    if (argc > 2) {
-        fprintf(stderr, "Usage: %s [config-file]\n", argv[0]);
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <config-file>\n", argv[0]);
         return 1;
     }
 
     ScanConfig config;
     std::string configError;
-    if (!loadScanConfig(argc == 2 ? argv[1] : nullptr, &config, &configError)) {
+    if (!loadScanConfig(argv[1], &config, &configError)) {
         fprintf(stderr, "Config error: %s\n", configError.c_str());
         return 1;
     }
 
     cudaError_t err = cudaSuccess;
 
-    printf("Loaded config from %s%s.\n",
-        config.sourcePath.c_str(),
-        config.usedFallback ? " (fallback)" : "");
+    printf("Loaded config from %s.\n", config.sourcePath.c_str());
     printf("Scanning %s rotations from (%d, %d, %d) to (%d, %d, %d).\n",
         textureModeName(config.mode),
         config.xStart,

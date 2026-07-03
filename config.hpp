@@ -22,7 +22,6 @@ struct ScanConfig {
 
     std::vector<RotationInfo> filter;
     std::string sourcePath;
-    bool usedFallback;
 };
 
 bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* error);

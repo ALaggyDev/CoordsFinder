@@ -37,18 +37,10 @@ Copy the example config once, then edit your local ignored config:
 Copy-Item coordsfinder.example.conf coordsfinder.conf
 ```
 
-Run with the default config:
+Run with a config path:
 
 ```powershell
-.\scanner-win.exe
+.\scanner-win.exe .\coordsfinder.conf
 ```
-
-Or pass a config path explicitly:
-
-```powershell
-.\scanner-win.exe .\some-other-config.conf
-```
-
-If `coordsfinder.conf` does not exist, the scanner falls back to `coordsfinder.example.conf`.
 
 Generated binaries and CUDA/MSVC build artifacts are ignored by Git.

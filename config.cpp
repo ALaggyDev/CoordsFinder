@@ -4,21 +4,11 @@
 #include <climits>
 #include <cctype>
 #include <cstdlib>
-#include <fstream>
 #include <sstream>
 
 #include "simple_ini.hpp"
 
 namespace {
-
-const char* DefaultConfigPath = "coordsfinder.conf";
-const char* FallbackConfigPath = "coordsfinder.example.conf";
-
-bool fileExists(const char* path)
-{
-    std::ifstream input(path);
-    return static_cast<bool>(input);
-}
 
 std::string lowerCopy(std::string value)
 {
@@ -322,13 +312,14 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
 bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* error)
 {
     const bool hasRequestedPath = requestedPath && requestedPath[0] != '\0';
-    const char* path = hasRequestedPath ? requestedPath : DefaultConfigPath;
-    bool usedFallback = false;
-
-    if (!hasRequestedPath && !fileExists(path) && fileExists(FallbackConfigPath)) {
-        path = FallbackConfigPath;
-        usedFallback = true;
+    if (!hasRequestedPath) {
+        if (error) {
+            *error = "missing config path";
+        }
+        return false;
     }
+
+    const char* path = requestedPath;
 
     std::vector<simple_ini::Line> lines;
     if (!simple_ini::readFile(path, &lines, error)) {
@@ -338,7 +329,6 @@ bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* 
     ScanConfig parsed = {};
     SettingFlags flags = {};
     parsed.sourcePath = path;
-    parsed.usedFallback = usedFallback;
 
     for (const simple_ini::Line& line : lines) {
         const std::string section = compactName(line.section);
