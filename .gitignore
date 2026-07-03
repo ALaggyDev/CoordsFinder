@@ -10,3 +10,6 @@ log*.txt
 tmpxft_*
 
 coordsfinder.conf
+
+outputs/
+searches/
