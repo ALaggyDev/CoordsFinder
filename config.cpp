@@ -98,66 +98,6 @@ bool parseTextureMode(const std::string& text, TextureMode* mode)
     return false;
 }
 
-bool rotationTokenToMask(const std::string& token, unsigned int* mask)
-{
-    const std::string lowered = lowerCopy(token);
-    if (lowered == "all") {
-        *mask |= XzRotationMaskAll;
-        return true;
-    }
-    if (lowered == "none") {
-        *mask = 0;
-        return true;
-    }
-
-    int degrees = 0;
-    if (!parseInt(token, &degrees)) {
-        return false;
-    }
-
-    switch (degrees) {
-    case 0:
-        *mask |= XzRotationMask0;
-        return true;
-    case 90:
-        *mask |= XzRotationMask90;
-        return true;
-    case 180:
-        *mask |= XzRotationMask180;
-        return true;
-    case 270:
-        *mask |= XzRotationMask270;
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool parseRotationMask(const std::string& text, unsigned int* mask)
-{
-    std::string normalized = text;
-    std::replace(normalized.begin(), normalized.end(), ',', ' ');
-
-    std::istringstream input(normalized);
-    std::string token;
-    unsigned int parsedMask = 0;
-    bool sawToken = false;
-
-    while (input >> token) {
-        sawToken = true;
-        if (!rotationTokenToMask(token, &parsedMask)) {
-            return false;
-        }
-    }
-
-    if (!sawToken) {
-        return false;
-    }
-
-    *mask = parsedMask;
-    return true;
-}
-
 bool fitsChar(int value)
 {
     return value >= -128 && value <= 127;
@@ -174,7 +114,6 @@ struct SettingFlags {
     bool chunkBlocksX = false;
     bool chunkBlocksZ = false;
     bool maxBadBlocks = false;
-    bool xzRotationMask = false;
     bool printChunks = false;
 };
 
@@ -291,10 +230,6 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
         flags->maxBadBlocks = parseInt(value, &config->maxBadBlocks);
         return flags->maxBadBlocks;
     }
-    if (name == "xzrotations" || name == "xzrotationmask") {
-        flags->xzRotationMask = parseRotationMask(value, &config->xzRotationMask);
-        return flags->xzRotationMask;
-    }
     if (name == "printchunks") {
         flags->printChunks = parseBool(value, &config->printChunks);
         return flags->printChunks;
@@ -326,12 +261,6 @@ bool validateRequiredSettings(const SettingFlags& flags, std::string* error)
     if (!flags.maxBadBlocks) {
         if (error) {
             *error = "missing required setting maxBadBlocks";
-        }
-        return false;
-    }
-    if (!flags.xzRotationMask) {
-        if (error) {
-            *error = "missing required setting xzRotations";
         }
         return false;
     }

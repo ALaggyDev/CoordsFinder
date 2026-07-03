@@ -2,7 +2,7 @@
 
 CUDA brute-force scanner for matching Minecraft block model texture variants at candidate coordinates.
 
-The scan bounds, texture mode, rotations, and filter rows are loaded from a config file.
+The scan bounds, texture mode, and filter rows are loaded from a config file.
 `coordsfinder.conf` is ignored by Git, and `coordsfinder.example.conf` is the tracked starting point.
 
 Filter rows use this format:
@@ -50,21 +50,5 @@ Or pass a config path explicitly:
 ```
 
 If `coordsfinder.conf` does not exist, the scanner falls back to `coordsfinder.example.conf`.
-
-`xzRotations` controls which world XZ facings are searched:
-
-```ini
-xzRotations = 0,180
-xzRotations = all
-```
-
-Each selected rotation prepares a rotated filter on the CPU, copies it to the GPU, then runs a separate full brute-force pass.
-
-The XZ rotations are top-down Minecraft map rotations where +X is east/right and +Z is south/down:
-
-- `0`: `(x, z) -> (x, z)`
-- `90`: `(x, z) -> (-z, x)`
-- `180`: `(x, z) -> (-x, -z)`
-- `270`: `(x, z) -> (z, -x)`
 
 Generated binaries and CUDA/MSVC build artifacts are ignored by Git.

@@ -18,7 +18,6 @@ struct ScanConfig {
     int chunkBlocksX;
     int chunkBlocksZ;
     int maxBadBlocks;
-    unsigned int xzRotationMask;
     bool printChunks;
 
     std::vector<RotationInfo> filter;

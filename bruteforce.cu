@@ -8,25 +8,13 @@
 
 __device__ __constant__ RotationInfo dev_filter[MaxFilterCount];
 
-cudaError_t initFilter(int xzRotation, const RotationInfo* hostFilter, int filterCount)
+cudaError_t initFilter(const RotationInfo* hostFilter, int filterCount)
 {
     if (filterCount < 0 || filterCount > MaxFilterCount) {
         return cudaErrorInvalidValue;
     }
 
-    RotationInfo rotatedFilter[MaxFilterCount];
-
-    for (int i = 0; i < filterCount; i++) {
-        RotationInfo info = hostFilter[i];
-        const Int2 rotatedOffset = rotateXzOffset(info.x, info.z, xzRotation);
-
-        info.x = static_cast<char>(rotatedOffset.x);
-        info.z = static_cast<char>(rotatedOffset.z);
-        info.rotation = static_cast<char>((info.rotation + xzRotation) & info.visibleMask);
-        rotatedFilter[i] = info;
-    }
-
-    return cudaMemcpyToSymbol(dev_filter, rotatedFilter, sizeof(RotationInfo) * filterCount);
+    return cudaMemcpyToSymbol(dev_filter, hostFilter, sizeof(RotationInfo) * filterCount);
 }
 
 template <TextureMode Mode>

@@ -10,44 +10,7 @@ struct Int3 {
     int z;
 };
 
-struct Int2 {
-    int x;
-    int z;
-};
-
-enum XzRotation {
-    XzRotation0 = 0,
-    XzRotation90 = 1,
-    XzRotation180 = 2,
-    XzRotation270 = 3,
-    XzRotationCount = 4
-};
-
-constexpr unsigned int XzRotationMask0 = 1u << XzRotation0;
-constexpr unsigned int XzRotationMask90 = 1u << XzRotation90;
-constexpr unsigned int XzRotationMask180 = 1u << XzRotation180;
-constexpr unsigned int XzRotationMask270 = 1u << XzRotation270;
-constexpr unsigned int XzRotationMaskAll =
-    XzRotationMask0 | XzRotationMask90 | XzRotationMask180 | XzRotationMask270;
-
 constexpr int MaxFilterCount = 256;
-
-// XZ rotations are clockwise on a top-down Minecraft map where +X is east/right
-// and +Z is south/down. For example, 90 degrees maps local +X to world +Z.
-inline Int2 rotateXzOffset(int x, int z, int rotation)
-{
-    switch (rotation & 3) {
-    case XzRotation90:
-        return { -z, x };
-    case XzRotation180:
-        return { -x, -z };
-    case XzRotation270:
-        return { z, -x };
-    case XzRotation0:
-    default:
-        return { x, z };
-    }
-}
 
 struct RotationInfo {
     char x;
@@ -71,7 +34,7 @@ struct RotationInfo {
     }
 };
 
-cudaError_t initFilter(int xzRotation, const RotationInfo* hostFilter, int filterCount);
+cudaError_t initFilter(const RotationInfo* hostFilter, int filterCount);
 
 cudaError_t launchBruteForce(
     TextureMode mode,

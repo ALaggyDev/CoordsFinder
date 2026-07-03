@@ -38,24 +38,6 @@ const char* textureModeName(TextureMode mode)
     }
 }
 
-void printSelectedXzRotations(unsigned int xzRotationMask)
-{
-    bool printed = false;
-
-    for (int rotation = 0; rotation < XzRotationCount; rotation++) {
-        if ((xzRotationMask & (1u << rotation)) == 0u) {
-            continue;
-        }
-
-        printf("%s%d", printed ? ", " : "", rotation * 90);
-        printed = true;
-    }
-
-    if (!printed) {
-        printf("none");
-    }
-}
-
 cudaError_t launchChunk(const ScanConfig& config, Int3 start, Int3 end)
 {
     const int xCount = end.x - start.x + 1;
@@ -114,51 +96,40 @@ int main(int argc, char** argv)
         config.xEnd,
         config.yEnd,
         config.zEnd);
-    printf("Selected XZ rotations: ");
-    printSelectedXzRotations(config.xzRotationMask);
-    printf(" degrees.\n");
     printf("Number of filters: %d.\n", static_cast<int>(config.filter.size()));
 
     const int chunkSizeX = config.chunkBlocksX * ThreadsPerAxis;
     const int chunkSizeZ = config.chunkBlocksZ * ThreadsPerAxis;
 
-    for (int xzRotation = 0; xzRotation < XzRotationCount; xzRotation++) {
-        if ((config.xzRotationMask & (1u << xzRotation)) == 0u) {
-            continue;
-        }
+    err = initFilter(config.filter.data(), static_cast<int>(config.filter.size()));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpyToSymbol failed: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
 
-        printf("Scanning XZ rotation %d degrees.\n", xzRotation * 90);
+    for (int z = config.zStart; z <= config.zEnd; z += chunkSizeZ) {
+        const int zEnd = minInt(z + chunkSizeZ - 1, config.zEnd);
 
-        err = initFilter(xzRotation, config.filter.data(), static_cast<int>(config.filter.size()));
-        if (err != cudaSuccess) {
-            fprintf(stderr, "cudaMemcpyToSymbol failed: %s\n", cudaGetErrorString(err));
-            return 1;
-        }
+        for (int x = config.xStart; x <= config.xEnd; x += chunkSizeX) {
+            const int xEnd = minInt(x + chunkSizeX - 1, config.xEnd);
 
-        for (int z = config.zStart; z <= config.zEnd; z += chunkSizeZ) {
-            const int zEnd = minInt(z + chunkSizeZ - 1, config.zEnd);
+            const Int3 start = { x, config.yStart, z };
+            const Int3 end = { xEnd, config.yEnd, zEnd };
 
-            for (int x = config.xStart; x <= config.xEnd; x += chunkSizeX) {
-                const int xEnd = minInt(x + chunkSizeX - 1, config.xEnd);
+            if (config.printChunks) {
+                printf("Scanning chunk from (%d, %d, %d) to (%d, %d, %d).\n",
+                    start.x,
+                    start.y,
+                    start.z,
+                    end.x,
+                    end.y,
+                    end.z);
+            }
 
-                const Int3 start = { x, config.yStart, z };
-                const Int3 end = { xEnd, config.yEnd, zEnd };
-
-                if (config.printChunks) {
-                    printf("Scanning chunk from (%d, %d, %d) to (%d, %d, %d).\n",
-                        start.x,
-                        start.y,
-                        start.z,
-                        end.x,
-                        end.y,
-                        end.z);
-                }
-
-                err = launchChunk(config, start, end);
-                if (err != cudaSuccess) {
-                    fprintf(stderr, "CUDA scan failed: %s\n", cudaGetErrorString(err));
-                    return 1;
-                }
+            err = launchChunk(config, start, end);
+            if (err != cudaSuccess) {
+                fprintf(stderr, "CUDA scan failed: %s\n", cudaGetErrorString(err));
+                return 1;
             }
         }
     }
