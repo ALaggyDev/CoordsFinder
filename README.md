@@ -5,6 +5,20 @@ CUDA brute-force scanner for matching Minecraft block model texture variants at 
 The scan bounds, texture mode, and filter rows are loaded from a config file.
 `coordsfinder.conf` is ignored by Git, and `coordsfinder.example.conf` is the tracked starting point.
 
+## Texture Modes
+
+| MC Version | Mode |
+| --- | --- |
+| <= 1.12.2 | `Vanilla-1` |
+| 1.13-1.21.1 | `Vanilla-2` |
+| 1.21.2+ | `Vanilla-3` |
+
+| Sodium Version | MC Version | Mode |
+| --- | --- | --- |
+| 1.0-4.1 | 1.16-1.18.2 | `Sodium-1` |
+| 4.2-4.8 | 1.19-1.19.3 | `Sodium-2` |
+| 4.9+ | 1.19.3+ | Use the MC mode |
+
 Filter rows use this format:
 
 ```text

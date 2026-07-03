@@ -64,25 +64,25 @@ bool parseBool(const std::string& text, bool* value)
 
 bool parseTextureMode(const std::string& text, TextureMode* mode)
 {
-    const std::string name = compactName(text);
-    if (name == "vanilla112" || name == "vanilla12") {
-        *mode = TextureModeVanilla12;
+    const std::string name = lowerCopy(text);
+    if (name == "vanilla-1") {
+        *mode = TextureModeVanilla1;
         return true;
     }
-    if (name == "vanilla") {
-        *mode = TextureModeVanilla;
+    if (name == "vanilla-2") {
+        *mode = TextureModeVanilla2;
         return true;
     }
-    if (name == "vanilla1211" || name == "vanilla211") {
-        *mode = TextureModeVanilla21_1;
+    if (name == "vanilla-3") {
+        *mode = TextureModeVanilla3;
         return true;
     }
-    if (name == "sodium") {
-        *mode = TextureModeSodium;
+    if (name == "sodium-1") {
+        *mode = TextureModeSodium1;
         return true;
     }
-    if (name == "sodium119" || name == "sodium19") {
-        *mode = TextureModeSodium19;
+    if (name == "sodium-2") {
+        *mode = TextureModeSodium2;
         return true;
     }
     return false;

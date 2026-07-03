@@ -24,17 +24,17 @@ int minInt(int lhs, int rhs)
 const char* textureModeName(TextureMode mode)
 {
     switch (mode) {
-    case TextureModeVanilla12:
-        return "Vanilla 1.12 legacy";
-    case TextureModeVanilla:
-        return "Vanilla";
-    case TextureModeVanilla21_1:
-        return "Vanilla 1.21.1";
-    case TextureModeSodium:
-        return "Sodium";
-    case TextureModeSodium19:
+    case TextureModeVanilla1:
+        return "Vanilla-1";
+    case TextureModeVanilla2:
+        return "Vanilla-2";
+    case TextureModeVanilla3:
+        return "Vanilla-3";
+    case TextureModeSodium1:
+        return "Sodium-1";
+    case TextureModeSodium2:
     default:
-        return "Sodium 1.19";
+        return "Sodium-2";
     }
 }
 

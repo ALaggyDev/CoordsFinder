@@ -56,21 +56,21 @@ cudaError_t launchBruteForce(
     dim3 block)
 {
     switch (mode) {
-    case TextureModeVanilla12:
-        bruteForceKernel<TextureModeVanilla12><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
+    case TextureModeVanilla1:
+        bruteForceKernel<TextureModeVanilla1><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
-    case TextureModeVanilla:
-        bruteForceKernel<TextureModeVanilla><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
+    case TextureModeVanilla2:
+        bruteForceKernel<TextureModeVanilla2><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
-    case TextureModeVanilla21_1:
-        bruteForceKernel<TextureModeVanilla21_1><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
+    case TextureModeVanilla3:
+        bruteForceKernel<TextureModeVanilla3><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
-    case TextureModeSodium:
-        bruteForceKernel<TextureModeSodium><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
+    case TextureModeSodium1:
+        bruteForceKernel<TextureModeSodium1><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
-    case TextureModeSodium19:
+    case TextureModeSodium2:
     default:
-        bruteForceKernel<TextureModeSodium19><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
+        bruteForceKernel<TextureModeSodium2><<<grid, block>>>(start, endInclusive, maxBadBlocks, filterCount);
         break;
     }
 

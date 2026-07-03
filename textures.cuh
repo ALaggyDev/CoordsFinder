@@ -5,11 +5,11 @@
 #include "cuda_runtime.h"
 
 enum TextureMode {
-    TextureModeVanilla12,
-    TextureModeVanilla,
-    TextureModeVanilla21_1,
-    TextureModeSodium,
-    TextureModeSodium19
+    TextureModeVanilla1,
+    TextureModeVanilla2,
+    TextureModeVanilla3,
+    TextureModeSodium1,
+    TextureModeSodium2
 };
 
 namespace texture_detail {
@@ -44,8 +44,7 @@ __host__ __device__ __forceinline__ int64_t staffordMix13(int64_t z)
 
 __host__ __device__ __forceinline__ int64_t coordinateRandomRaw(int x, int y, int z)
 {
-    const int xTerm = x * 3129871;
-    int64_t seed = static_cast<int64_t>(xTerm) ^ (static_cast<int64_t>(z) * 116129781LL) ^ static_cast<int64_t>(y);
+    int64_t seed = static_cast<int64_t>(x * 3129871) ^ (static_cast<int64_t>(z) * 116129781LL) ^ static_cast<int64_t>(y);
 
     seed = seed * seed * 42317861LL + seed * 11LL;
     return seed;
@@ -61,7 +60,7 @@ __host__ __device__ __forceinline__ int64_t coordinateRandom(int x, int y, int z
     return coordinateRandomRaw(x, y, z) >> 16;
 }
 
-__host__ __device__ __forceinline__ int randomVanilla21_1(int64_t seed)
+__host__ __device__ __forceinline__ int randomVanilla2(int64_t seed)
 {
     seed = (seed ^ JavaMultiplier) & JavaMask;
     return static_cast<int>(unsignedShiftRight(seed * 0xBB20B4600A69LL + 0x40942DE6BALL, 16));
@@ -96,7 +95,7 @@ __host__ __device__ __forceinline__ int legacyNextInt(int64_t seed, char bound)
     return value;
 }
 
-__host__ __device__ __forceinline__ int randomSodium(int64_t seed)
+__host__ __device__ __forceinline__ int randomSodium1(int64_t seed)
 {
     seed ^= unsignedShiftRight(seed, 33);
     seed *= 0xff51afd7ed558ccdLL;
@@ -109,7 +108,7 @@ __host__ __device__ __forceinline__ int randomSodium(int64_t seed)
     return static_cast<int>(rand1 + rand2);
 }
 
-__host__ __device__ __forceinline__ int randomSodium19(int64_t seed)
+__host__ __device__ __forceinline__ int randomSodium2(int64_t seed)
 {
     int64_t low = seed ^ 7640891576956012809LL;
     int64_t high = low - 7046029254386353131LL;
@@ -121,71 +120,71 @@ __host__ __device__ __forceinline__ int randomSodium19(int64_t seed)
 }
 }
 
-__host__ __device__ __forceinline__ char getTextureVanilla12(int x, int y, int z, char variantCount)
+__host__ __device__ __forceinline__ char getTextureVanilla1(int x, int y, int z, char variantCount)
 {
     return static_cast<char>(texture_detail::positiveModulo(texture_detail::coordinateRandomLegacy(x, y, z), variantCount));
 }
 
-__host__ __device__ __forceinline__ char getTextureVanilla(int x, int y, int z, char variantCount)
+__host__ __device__ __forceinline__ char getTextureVanilla2(int x, int y, int z, char variantCount)
+{
+    return static_cast<char>(texture_detail::positiveModulo(texture_detail::randomVanilla2(texture_detail::coordinateRandom(x, y, z)), variantCount));
+}
+
+__host__ __device__ __forceinline__ char getTextureVanilla3(int x, int y, int z, char variantCount)
 {
     return static_cast<char>(texture_detail::legacyNextInt(texture_detail::coordinateRandom(x, y, z), variantCount));
 }
 
-__host__ __device__ __forceinline__ char getTextureVanilla21_1(int x, int y, int z, char variantCount)
+__host__ __device__ __forceinline__ char getTextureSodium1(int x, int y, int z, char variantCount)
 {
-    return static_cast<char>(texture_detail::positiveModulo(texture_detail::randomVanilla21_1(texture_detail::coordinateRandom(x, y, z)), variantCount));
+    return static_cast<char>(texture_detail::positiveModulo(texture_detail::randomSodium1(texture_detail::coordinateRandom(x, y, z)), variantCount));
 }
 
-__host__ __device__ __forceinline__ char getTextureSodium(int x, int y, int z, char variantCount)
+__host__ __device__ __forceinline__ char getTextureSodium2(int x, int y, int z, char variantCount)
 {
-    return static_cast<char>(texture_detail::positiveModulo(texture_detail::randomSodium(texture_detail::coordinateRandom(x, y, z)), variantCount));
-}
-
-__host__ __device__ __forceinline__ char getTextureSodium19(int x, int y, int z, char variantCount)
-{
-    return static_cast<char>(texture_detail::positiveModulo(texture_detail::randomSodium19(texture_detail::coordinateRandom(x, y, z)), variantCount));
+    return static_cast<char>(texture_detail::positiveModulo(texture_detail::randomSodium2(texture_detail::coordinateRandom(x, y, z)), variantCount));
 }
 
 template <TextureMode Mode>
 struct TextureSampler;
 
 template <>
-struct TextureSampler<TextureModeVanilla12> {
+struct TextureSampler<TextureModeVanilla1> {
     __device__ __forceinline__ static char sample(int x, int y, int z, char variantCount)
     {
-        return getTextureVanilla12(x, y, z, variantCount);
+        return getTextureVanilla1(x, y, z, variantCount);
     }
 };
 
 template <>
-struct TextureSampler<TextureModeVanilla> {
+struct TextureSampler<TextureModeVanilla2> {
     __device__ __forceinline__ static char sample(int x, int y, int z, char variantCount)
     {
-        return getTextureVanilla(x, y, z, variantCount);
+        return getTextureVanilla2(x, y, z, variantCount);
     }
 };
 
 template <>
-struct TextureSampler<TextureModeVanilla21_1> {
+struct TextureSampler<TextureModeVanilla3> {
     __device__ __forceinline__ static char sample(int x, int y, int z, char variantCount)
     {
-        return getTextureVanilla21_1(x, y, z, variantCount);
+        return getTextureVanilla3(x, y, z, variantCount);
     }
 };
 
 template <>
-struct TextureSampler<TextureModeSodium> {
+struct TextureSampler<TextureModeSodium1> {
     __device__ __forceinline__ static char sample(int x, int y, int z, char variantCount)
     {
-        return getTextureSodium(x, y, z, variantCount);
+        return getTextureSodium1(x, y, z, variantCount);
     }
 };
 
 template <>
-struct TextureSampler<TextureModeSodium19> {
+struct TextureSampler<TextureModeSodium2> {
     __device__ __forceinline__ static char sample(int x, int y, int z, char variantCount)
     {
-        return getTextureSodium19(x, y, z, variantCount);
+        return getTextureSodium2(x, y, z, variantCount);
     }
 };
 
@@ -198,16 +197,16 @@ __device__ __forceinline__ char getTextureForMode(int x, int y, int z, char vari
 __host__ __device__ __forceinline__ char getTexture(TextureMode mode, int x, int y, int z, char variantCount)
 {
     switch (mode) {
-    case TextureModeVanilla12:
-        return getTextureVanilla12(x, y, z, variantCount);
-    case TextureModeVanilla:
-        return getTextureVanilla(x, y, z, variantCount);
-    case TextureModeVanilla21_1:
-        return getTextureVanilla21_1(x, y, z, variantCount);
-    case TextureModeSodium:
-        return getTextureSodium(x, y, z, variantCount);
-    case TextureModeSodium19:
+    case TextureModeVanilla1:
+        return getTextureVanilla1(x, y, z, variantCount);
+    case TextureModeVanilla2:
+        return getTextureVanilla2(x, y, z, variantCount);
+    case TextureModeVanilla3:
+        return getTextureVanilla3(x, y, z, variantCount);
+    case TextureModeSodium1:
+        return getTextureSodium1(x, y, z, variantCount);
+    case TextureModeSodium2:
     default:
-        return getTextureSodium19(x, y, z, variantCount);
+        return getTextureSodium2(x, y, z, variantCount);
     }
 }
