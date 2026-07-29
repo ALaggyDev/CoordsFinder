@@ -88,9 +88,74 @@ bool parseTextureMode(const std::string& text, TextureMode* mode)
     return false;
 }
 
+bool isDirection(int value)
+{
+    return value == 0 || value == 90 || value == 180 || value == 270;
+}
+
+bool parseDirections(const std::string& text, std::vector<int>* directions)
+{
+    if (text.size() < 2 || text.front() != '[' || text.back() != ']') {
+        return false;
+    }
+
+    const std::string contents = simple_ini::trim(text.substr(1, text.size() - 2));
+    if (contents.empty()) {
+        return false;
+    }
+
+    std::vector<int> parsed;
+    size_t start = 0;
+
+    while (start <= contents.size()) {
+        const size_t comma = contents.find(',', start);
+        const std::string token = simple_ini::trim(contents.substr(
+            start,
+            comma == std::string::npos ? std::string::npos : comma - start));
+
+        int direction = 0;
+        if (token.empty() ||
+            !parseInt(token, &direction) ||
+            !isDirection(direction) ||
+            std::find(parsed.begin(), parsed.end(), direction) != parsed.end()) {
+            return false;
+        }
+
+        parsed.push_back(direction);
+
+        if (comma == std::string::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+
+    *directions = parsed;
+    return true;
+}
+
 bool fitsChar(int value)
 {
     return value >= -128 && value <= 127;
+}
+
+struct Int2 {
+    int x;
+    int z;
+};
+
+Int2 rotateXzOffset(int x, int z, int direction)
+{
+    switch (direction / 90) {
+    case 1:
+        return { -z, x };
+    case 2:
+        return { -x, -z };
+    case 3:
+        return { z, -x };
+    case 0:
+    default:
+        return { x, z };
+    }
 }
 
 struct SettingFlags {
@@ -117,12 +182,12 @@ bool parseFilterLine(
     int x = 0;
     int y = 0;
     int z = 0;
-    int rotation = 0;
+    int variant = 0;
     std::string separator;
 
-    if (!(input >> x >> y >> z >> separator >> rotation) || separator != "|") {
+    if (!(input >> x >> y >> z >> separator >> variant) || separator != "|") {
         if (error) {
-            *error = linePrefix(path, line) + "filter rows must be: x y z | rotation [side]";
+            *error = linePrefix(path, line) + "filter rows must be: x y z | variant [side]";
         }
         return false;
     }
@@ -160,9 +225,9 @@ bool parseFilterLine(
         return false;
     }
 
-    if (rotation < 0 || rotation > (side ? 1 : 3)) {
+    if (variant < 0 || variant > (side ? 1 : 3)) {
         if (error) {
-            *error = linePrefix(path, line) + "rotation is out of range for this filter row";
+            *error = linePrefix(path, line) + "variant is out of range for this filter row";
         }
         return false;
     }
@@ -171,7 +236,7 @@ bool parseFilterLine(
         static_cast<char>(x),
         static_cast<char>(y),
         static_cast<char>(z),
-        static_cast<char>(rotation),
+        static_cast<char>(variant),
         side));
     return true;
 }
@@ -183,6 +248,9 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
     if (name == "mode") {
         flags->mode = parseTextureMode(value, &config->mode);
         return flags->mode;
+    }
+    if (name == "directions") {
+        return parseDirections(value, &config->directions);
     }
     if (name == "xstart") {
         flags->xStart = parseInt(value, &config->xStart);
@@ -304,9 +372,52 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
         return false;
     }
 
+    for (int direction : config.directions) {
+        for (const RotationInfo& info : config.filter) {
+            const Int2 rotated = rotateXzOffset(
+                static_cast<signed char>(info.x),
+                static_cast<signed char>(info.z),
+                direction);
+            if (!fitsChar(rotated.x) || !fitsChar(rotated.z)) {
+                if (error) {
+                    *error =
+                        "direction " + std::to_string(direction) +
+                        " rotates a filter offset outside signed char range [-128, 127]";
+                }
+                return false;
+            }
+        }
+    }
+
     return true;
 }
 
+}
+
+std::vector<RotationInfo> makeDirectionalFilter(
+    const std::vector<RotationInfo>& filter,
+    int direction)
+{
+    std::vector<RotationInfo> directionalFilter;
+    directionalFilter.reserve(filter.size());
+
+    const int quarterTurns = direction / 90;
+    for (RotationInfo info : filter) {
+        const Int2 rotated = rotateXzOffset(
+            static_cast<signed char>(info.x),
+            static_cast<signed char>(info.z),
+            direction);
+        info.x = static_cast<char>(rotated.x);
+        info.z = static_cast<char>(rotated.z);
+
+        if (info.visibleMask == 3) {
+            info.rotation = static_cast<char>((info.rotation + quarterTurns) % 4);
+        }
+
+        directionalFilter.push_back(info);
+    }
+
+    return directionalFilter;
 }
 
 bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* error)

@@ -7,6 +7,7 @@
 
 struct ScanConfig {
     TextureMode mode;
+    std::vector<int> directions = { 0 };
 
     int xStart;
     int xEnd;
@@ -23,5 +24,9 @@ struct ScanConfig {
     std::vector<RotationInfo> filter;
     std::string sourcePath;
 };
+
+std::vector<RotationInfo> makeDirectionalFilter(
+    const std::vector<RotationInfo>& filter,
+    int direction);
 
 bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* error);
