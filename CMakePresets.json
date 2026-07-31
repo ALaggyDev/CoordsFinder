@@ -1,0 +1,59 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "cpu-release",
+      "displayName": "CPU-only release",
+      "binaryDir": "${sourceDir}/build/cpu-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "COORDSFINDER_ENABLE_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "cuda-release",
+      "displayName": "CPU + CUDA release",
+      "binaryDir": "${sourceDir}/build/cuda-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "COORDSFINDER_ENABLE_CUDA": "ON",
+        "CMAKE_CUDA_ARCHITECTURES": "native"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda-release",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

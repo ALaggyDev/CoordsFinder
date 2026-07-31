@@ -27,6 +27,19 @@ std::string compactName(std::string value)
     return value;
 }
 
+std::string canonicalSettingName(const std::string& key)
+{
+    // Treat legacy chunk names as aliases when checking for duplicate settings.
+    const std::string name = compactName(key);
+    if (name == "chunkblocksx") {
+        return "tilesizex";
+    }
+    if (name == "chunkblocksz") {
+        return "tilesizez";
+    }
+    return name;
+}
+
 std::string linePrefix(const char* path, const simple_ini::Line& line)
 {
     return std::string(path) + ":" + std::to_string(line.number) + ": ";
@@ -66,23 +79,37 @@ bool parseTextureMode(const std::string& text, TextureMode* mode)
 {
     const std::string name = lowerCopy(text);
     if (name == "vanilla-1") {
-        *mode = TextureModeVanilla1;
+        *mode = TextureMode::Vanilla1;
         return true;
     }
     if (name == "vanilla-2") {
-        *mode = TextureModeVanilla2;
+        *mode = TextureMode::Vanilla2;
         return true;
     }
     if (name == "vanilla-3") {
-        *mode = TextureModeVanilla3;
+        *mode = TextureMode::Vanilla3;
         return true;
     }
     if (name == "sodium-1") {
-        *mode = TextureModeSodium1;
+        *mode = TextureMode::Sodium1;
         return true;
     }
     if (name == "sodium-2") {
-        *mode = TextureModeSodium2;
+        *mode = TextureMode::Sodium2;
+        return true;
+    }
+    return false;
+}
+
+bool parseScanOrder(const std::string& text, ScanOrder* order)
+{
+    const std::string name = lowerCopy(text);
+    if (name == "linear" || name == "native") {
+        *order = ScanOrder::Linear;
+        return true;
+    }
+    if (name == "spiral") {
+        *order = ScanOrder::Spiral;
         return true;
     }
     return false;
@@ -166,8 +193,8 @@ struct SettingFlags {
     bool yEnd = false;
     bool zStart = false;
     bool zEnd = false;
-    bool chunkBlocksX = false;
-    bool chunkBlocksZ = false;
+    bool tileSizeX = false;
+    bool tileSizeZ = false;
     bool maxBadBlocks = false;
     bool printChunks = false;
 };
@@ -220,7 +247,7 @@ bool parseFilterLine(
 
     if (!fitsChar(x) || !fitsChar(y) || !fitsChar(z)) {
         if (error) {
-            *error = linePrefix(path, line) + "filter offsets must fit in signed char range [-128, 127]";
+            *error = linePrefix(path, line) + "filter offsets must fit in int8 range [-128, 127]";
         }
         return false;
     }
@@ -233,10 +260,10 @@ bool parseFilterLine(
     }
 
     filter->push_back(RotationInfo(
-        static_cast<char>(x),
-        static_cast<char>(y),
-        static_cast<char>(z),
-        static_cast<char>(variant),
+        x,
+        y,
+        z,
+        variant,
         side));
     return true;
 }
@@ -251,6 +278,9 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
     }
     if (name == "directions") {
         return parseDirections(value, &config->directions);
+    }
+    if (name == "scanorder") {
+        return parseScanOrder(value, &config->scanOrder);
     }
     if (name == "xstart") {
         flags->xStart = parseInt(value, &config->xStart);
@@ -276,13 +306,32 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
         flags->zEnd = parseInt(value, &config->zEnd);
         return flags->zEnd;
     }
+    if (name == "tilesizex") {
+        flags->tileSizeX = parseInt(value, &config->tileSizeX);
+        return flags->tileSizeX;
+    }
+    if (name == "tilesizez") {
+        flags->tileSizeZ = parseInt(value, &config->tileSizeZ);
+        return flags->tileSizeZ;
+    }
     if (name == "chunkblocksx") {
-        flags->chunkBlocksX = parseInt(value, &config->chunkBlocksX);
-        return flags->chunkBlocksX;
+        int blocks = 0;
+        if (!parseInt(value, &blocks) || blocks <= 0 || blocks > INT_MAX / 8) {
+            return false;
+        }
+        // The original CUDA launch used eight threads per axis.
+        config->tileSizeX = blocks * 8;
+        flags->tileSizeX = true;
+        return true;
     }
     if (name == "chunkblocksz") {
-        flags->chunkBlocksZ = parseInt(value, &config->chunkBlocksZ);
-        return flags->chunkBlocksZ;
+        int blocks = 0;
+        if (!parseInt(value, &blocks) || blocks <= 0 || blocks > INT_MAX / 8) {
+            return false;
+        }
+        config->tileSizeZ = blocks * 8;
+        flags->tileSizeZ = true;
+        return true;
     }
     if (name == "maxbadblocks") {
         flags->maxBadBlocks = parseInt(value, &config->maxBadBlocks);
@@ -310,21 +359,9 @@ bool validateRequiredSettings(const SettingFlags& flags, std::string* error)
         }
         return false;
     }
-    if (!flags.chunkBlocksX || !flags.chunkBlocksZ) {
-        if (error) {
-            *error = "missing required chunkBlocksX or chunkBlocksZ setting";
-        }
-        return false;
-    }
     if (!flags.maxBadBlocks) {
         if (error) {
             *error = "missing required setting maxBadBlocks";
-        }
-        return false;
-    }
-    if (!flags.printChunks) {
-        if (error) {
-            *error = "missing required setting printChunks";
         }
         return false;
     }
@@ -344,9 +381,9 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
         return false;
     }
 
-    if (config.chunkBlocksX <= 0 || config.chunkBlocksZ <= 0) {
+    if (config.tileSizeX <= 0 || config.tileSizeZ <= 0) {
         if (error) {
-            *error = "chunkBlocksX and chunkBlocksZ must be positive";
+            *error = "tileSizeX and tileSizeZ must be positive";
         }
         return false;
     }
@@ -367,7 +404,7 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
 
     if (config.filter.size() > MaxFilterCount) {
         if (error) {
-            *error = "filter contains more rows than MaxFilterCount";
+            *error = "filter contains more than 256 rows";
         }
         return false;
     }
@@ -375,14 +412,14 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
     for (int direction : config.directions) {
         for (const RotationInfo& info : config.filter) {
             const Int2 rotated = rotateXzOffset(
-                static_cast<signed char>(info.x),
-                static_cast<signed char>(info.z),
+                info.x,
+                info.z,
                 direction);
             if (!fitsChar(rotated.x) || !fitsChar(rotated.z)) {
                 if (error) {
                     *error =
                         "direction " + std::to_string(direction) +
-                        " rotates a filter offset outside signed char range [-128, 127]";
+                        " rotates a filter offset outside int8 range [-128, 127]";
                 }
                 return false;
             }
@@ -392,32 +429,6 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
     return true;
 }
 
-}
-
-std::vector<RotationInfo> makeDirectionalFilter(
-    const std::vector<RotationInfo>& filter,
-    int direction)
-{
-    std::vector<RotationInfo> directionalFilter;
-    directionalFilter.reserve(filter.size());
-
-    const int quarterTurns = direction / 90;
-    for (RotationInfo info : filter) {
-        const Int2 rotated = rotateXzOffset(
-            static_cast<signed char>(info.x),
-            static_cast<signed char>(info.z),
-            direction);
-        info.x = static_cast<char>(rotated.x);
-        info.z = static_cast<char>(rotated.z);
-
-        if (info.visibleMask == 3) {
-            info.rotation = static_cast<char>((info.rotation + quarterTurns) % 4);
-        }
-
-        directionalFilter.push_back(info);
-    }
-
-    return directionalFilter;
 }
 
 bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* error)
@@ -439,6 +450,7 @@ bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* 
 
     ScanConfig parsed = {};
     SettingFlags flags = {};
+    std::vector<std::string> seenSettings;
     parsed.sourcePath = path;
 
     for (const simple_ini::Line& line : lines) {
@@ -470,6 +482,16 @@ bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* 
             }
             return false;
         }
+
+
+        const std::string settingName = canonicalSettingName(line.key);
+        if (std::find(seenSettings.begin(), seenSettings.end(), settingName) != seenSettings.end()) {
+            if (error) {
+                *error = linePrefix(path, line) + "duplicate setting '" + line.key + "'";
+            }
+            return false;
+        }
+        seenSettings.push_back(settingName);
 
         if (!applySetting(&parsed, &flags, line.key, line.value)) {
             if (error) {

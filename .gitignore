@@ -1,15 +1,4 @@
-*.exe
-*.exp
-*.lib
-*.obj
-*.pdb
-*.ilk
-*.log
-log*.txt
+build/
 
-tmpxft_*
-
-coordsfinder.conf
-
-outputs/
 searches/
+outputs/

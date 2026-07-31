@@ -3,10 +3,11 @@
 #include <string>
 #include <vector>
 
-#include "bruteforce.cuh"
+#include "types.hpp"
 
 struct ScanConfig {
-    TextureMode mode;
+    TextureMode mode = TextureMode::Vanilla3;
+    ScanOrder scanOrder = ScanOrder::Linear;
     std::vector<int> directions = { 0 };
 
     int xStart;
@@ -16,17 +17,13 @@ struct ScanConfig {
     int zStart;
     int zEnd;
 
-    int chunkBlocksX;
-    int chunkBlocksZ;
-    int maxBadBlocks;
-    bool printChunks;
+    int tileSizeX = 1024;
+    int tileSizeZ = 1024;
+    int maxBadBlocks = 0;
+    bool printChunks = false;
 
     std::vector<RotationInfo> filter;
     std::string sourcePath;
 };
-
-std::vector<RotationInfo> makeDirectionalFilter(
-    const std::vector<RotationInfo>& filter,
-    int direction);
 
 bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* error);
