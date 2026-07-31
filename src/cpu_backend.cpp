@@ -10,7 +10,7 @@
 namespace {
 constexpr std::size_t ResultBatchSize = 256;
 
-template <TextureMode Mode>
+template <TextureAlgorithm Mode>
 void scanWorkItem(
     const ScanConfig& config,
     const WorkItem& item,
@@ -26,20 +26,20 @@ void scanWorkItem(
             }
 
             for (std::int64_t y = item.start.y; y <= item.end.y; ++y) {
-                const int badBlocks = countBadBlocks<Mode>(
+                const int mismatches = countMismatches<Mode>(
                     static_cast<std::int32_t>(x),
                     static_cast<std::int32_t>(y),
                     static_cast<std::int32_t>(z),
                     filter.data(),
                     filter.size(),
-                    config.maxBadBlocks);
+                    config.errorTolerance);
 
-                if (badBlocks <= config.maxBadBlocks) {
+                if (mismatches <= config.errorTolerance) {
                     matches->push_back({
                         static_cast<std::int32_t>(x),
                         static_cast<std::int32_t>(y),
                         static_cast<std::int32_t>(z),
-                        badBlocks,
+                        mismatches,
                         item.direction,
                     });
                     if (matches->size() == ResultBatchSize) {
@@ -51,7 +51,7 @@ void scanWorkItem(
     }
 }
 
-template <TextureMode Mode>
+template <TextureAlgorithm Mode>
 bool runMode(
     const ScanConfig& config,
     const ScanPlan& plan,
@@ -94,7 +94,7 @@ bool runMode(
             }
 
             const WorkItem& item = plan.items[index];
-            if (config.printChunks) {
+            if (config.verbose) {
                 std::lock_guard<std::mutex> lock(sinkMutex);
                 std::fprintf(stderr,
                     "Scanning tile (%d, %d, %d) to (%d, %d, %d), direction %d.\n",
@@ -144,18 +144,18 @@ bool runCpuScan(
         return false;
     }
 
-    switch (config.mode) {
-    // Dispatch once here instead of branching on the texture mode for every sample.
-    case TextureMode::Vanilla1:
-        return runMode<TextureMode::Vanilla1>(config, plan, threadCount, state, sink);
-    case TextureMode::Vanilla2:
-        return runMode<TextureMode::Vanilla2>(config, plan, threadCount, state, sink);
-    case TextureMode::Vanilla3:
-        return runMode<TextureMode::Vanilla3>(config, plan, threadCount, state, sink);
-    case TextureMode::Sodium1:
-        return runMode<TextureMode::Sodium1>(config, plan, threadCount, state, sink);
-    case TextureMode::Sodium2:
+    switch (config.algorithm) {
+    // Dispatch once here instead of branching on the texture algorithm for every sample.
+    case TextureAlgorithm::Vanilla1:
+        return runMode<TextureAlgorithm::Vanilla1>(config, plan, threadCount, state, sink);
+    case TextureAlgorithm::Vanilla2:
+        return runMode<TextureAlgorithm::Vanilla2>(config, plan, threadCount, state, sink);
+    case TextureAlgorithm::Vanilla3:
+        return runMode<TextureAlgorithm::Vanilla3>(config, plan, threadCount, state, sink);
+    case TextureAlgorithm::Sodium1:
+        return runMode<TextureAlgorithm::Sodium1>(config, plan, threadCount, state, sink);
+    case TextureAlgorithm::Sodium2:
     default:
-        return runMode<TextureMode::Sodium2>(config, plan, threadCount, state, sink);
+        return runMode<TextureAlgorithm::Sodium2>(config, plan, threadCount, state, sink);
     }
 }

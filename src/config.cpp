@@ -27,19 +27,6 @@ std::string compactName(std::string value)
     return value;
 }
 
-std::string canonicalSettingName(const std::string& key)
-{
-    // Treat legacy chunk names as aliases when checking for duplicate settings.
-    const std::string name = compactName(key);
-    if (name == "chunkblocksx") {
-        return "tilesizex";
-    }
-    if (name == "chunkblocksz") {
-        return "tilesizez";
-    }
-    return name;
-}
-
 std::string linePrefix(const char* path, const simple_ini::Line& line)
 {
     return std::string(path) + ":" + std::to_string(line.number) + ": ";
@@ -75,27 +62,58 @@ bool parseBool(const std::string& text, bool* value)
     return false;
 }
 
-bool parseTextureMode(const std::string& text, TextureMode* mode)
+bool parseIntPair(const std::string& text, int* first, int* second)
+{
+    std::istringstream input(text);
+    char opening = '\0';
+    char comma = '\0';
+    char closing = '\0';
+    int parsedFirst = 0;
+    int parsedSecond = 0;
+    std::string extra;
+    if (!(input >> opening >> parsedFirst >> comma >> parsedSecond >> closing)
+        || opening != '('
+        || comma != ','
+        || closing != ')'
+        || (input >> extra)) {
+        return false;
+    }
+    *first = parsedFirst;
+    *second = parsedSecond;
+    return true;
+}
+
+bool parseTileSize(const std::string& text, TileSize* value)
+{
+    return parseIntPair(text, &value->x, &value->z);
+}
+
+bool parseRange(const std::string& text, IntRange* value)
+{
+    return parseIntPair(text, &value->start, &value->end);
+}
+
+bool parseTextureAlgorithm(const std::string& text, TextureAlgorithm* algorithm)
 {
     const std::string name = lowerCopy(text);
     if (name == "vanilla-1") {
-        *mode = TextureMode::Vanilla1;
+        *algorithm = TextureAlgorithm::Vanilla1;
         return true;
     }
     if (name == "vanilla-2") {
-        *mode = TextureMode::Vanilla2;
+        *algorithm = TextureAlgorithm::Vanilla2;
         return true;
     }
     if (name == "vanilla-3") {
-        *mode = TextureMode::Vanilla3;
+        *algorithm = TextureAlgorithm::Vanilla3;
         return true;
     }
     if (name == "sodium-1") {
-        *mode = TextureMode::Sodium1;
+        *algorithm = TextureAlgorithm::Sodium1;
         return true;
     }
     if (name == "sodium-2") {
-        *mode = TextureMode::Sodium2;
+        *algorithm = TextureAlgorithm::Sodium2;
         return true;
     }
     return false;
@@ -186,17 +204,11 @@ Int2 rotateXzOffset(int x, int z, int direction)
 }
 
 struct SettingFlags {
-    bool mode = false;
-    bool xStart = false;
-    bool xEnd = false;
-    bool yStart = false;
-    bool yEnd = false;
-    bool zStart = false;
-    bool zEnd = false;
-    bool tileSizeX = false;
-    bool tileSizeZ = false;
-    bool maxBadBlocks = false;
-    bool printChunks = false;
+    bool algorithm = false;
+    bool xRange = false;
+    bool yRange = false;
+    bool zRange = false;
+    bool errorTolerance = false;
 };
 
 bool parseFilterLine(
@@ -272,9 +284,9 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
 {
     const std::string name = compactName(key);
 
-    if (name == "mode") {
-        flags->mode = parseTextureMode(value, &config->mode);
-        return flags->mode;
+    if (name == "algorithm") {
+        flags->algorithm = parseTextureAlgorithm(value, &config->algorithm);
+        return flags->algorithm;
     }
     if (name == "directions") {
         return parseDirections(value, &config->directions);
@@ -282,64 +294,30 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
     if (name == "scanorder") {
         return parseScanOrder(value, &config->scanOrder);
     }
-    if (name == "xstart") {
-        flags->xStart = parseInt(value, &config->xStart);
-        return flags->xStart;
+    if (name == "xrange") {
+        flags->xRange = parseRange(value, &config->xRange);
+        return flags->xRange;
     }
-    if (name == "xend") {
-        flags->xEnd = parseInt(value, &config->xEnd);
-        return flags->xEnd;
+    if (name == "yrange") {
+        flags->yRange = parseRange(value, &config->yRange);
+        return flags->yRange;
     }
-    if (name == "ystart") {
-        flags->yStart = parseInt(value, &config->yStart);
-        return flags->yStart;
+    if (name == "zrange") {
+        flags->zRange = parseRange(value, &config->zRange);
+        return flags->zRange;
     }
-    if (name == "yend") {
-        flags->yEnd = parseInt(value, &config->yEnd);
-        return flags->yEnd;
+    if (name == "cputilesize") {
+        return parseTileSize(value, &config->cpuTileSize);
     }
-    if (name == "zstart") {
-        flags->zStart = parseInt(value, &config->zStart);
-        return flags->zStart;
+    if (name == "cudatilesize") {
+        return parseTileSize(value, &config->cudaTileSize);
     }
-    if (name == "zend") {
-        flags->zEnd = parseInt(value, &config->zEnd);
-        return flags->zEnd;
+    if (name == "errortolerance") {
+        flags->errorTolerance = parseInt(value, &config->errorTolerance);
+        return flags->errorTolerance;
     }
-    if (name == "tilesizex") {
-        flags->tileSizeX = parseInt(value, &config->tileSizeX);
-        return flags->tileSizeX;
-    }
-    if (name == "tilesizez") {
-        flags->tileSizeZ = parseInt(value, &config->tileSizeZ);
-        return flags->tileSizeZ;
-    }
-    if (name == "chunkblocksx") {
-        int blocks = 0;
-        if (!parseInt(value, &blocks) || blocks <= 0 || blocks > INT_MAX / 8) {
-            return false;
-        }
-        // The original CUDA launch used eight threads per axis.
-        config->tileSizeX = blocks * 8;
-        flags->tileSizeX = true;
-        return true;
-    }
-    if (name == "chunkblocksz") {
-        int blocks = 0;
-        if (!parseInt(value, &blocks) || blocks <= 0 || blocks > INT_MAX / 8) {
-            return false;
-        }
-        config->tileSizeZ = blocks * 8;
-        flags->tileSizeZ = true;
-        return true;
-    }
-    if (name == "maxbadblocks") {
-        flags->maxBadBlocks = parseInt(value, &config->maxBadBlocks);
-        return flags->maxBadBlocks;
-    }
-    if (name == "printchunks") {
-        flags->printChunks = parseBool(value, &config->printChunks);
-        return flags->printChunks;
+    if (name == "verbose") {
+        return parseBool(value, &config->verbose);
     }
 
     return false;
@@ -347,21 +325,21 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
 
 bool validateRequiredSettings(const SettingFlags& flags, std::string* error)
 {
-    if (!flags.mode) {
+    if (!flags.algorithm) {
         if (error) {
-            *error = "missing required setting mode";
+            *error = "missing required setting algorithm";
         }
         return false;
     }
-    if (!flags.xStart || !flags.xEnd || !flags.yStart || !flags.yEnd || !flags.zStart || !flags.zEnd) {
+    if (!flags.xRange || !flags.yRange || !flags.zRange) {
         if (error) {
-            *error = "missing one or more required scan bound settings";
+            *error = "missing one or more required scan range settings";
         }
         return false;
     }
-    if (!flags.maxBadBlocks) {
+    if (!flags.errorTolerance) {
         if (error) {
-            *error = "missing required setting maxBadBlocks";
+            *error = "missing required setting errorTolerance";
         }
         return false;
     }
@@ -374,23 +352,32 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
         return false;
     }
 
-    if (config.xStart > config.xEnd || config.yStart > config.yEnd || config.zStart > config.zEnd) {
+    if (config.xRange.start > config.xRange.end
+        || config.yRange.start > config.yRange.end
+        || config.zRange.start > config.zRange.end) {
         if (error) {
-            *error = "scan start bounds must be less than or equal to end bounds";
+            *error = "scan range starts must be less than or equal to their ends";
         }
         return false;
     }
 
-    if (config.tileSizeX <= 0 || config.tileSizeZ <= 0) {
+    if (config.cpuTileSize.x <= 0 || config.cpuTileSize.z <= 0) {
         if (error) {
-            *error = "tileSizeX and tileSizeZ must be positive";
+            *error = "cpuTileSize dimensions must be positive";
         }
         return false;
     }
 
-    if (config.maxBadBlocks < 0) {
+    if (config.cudaTileSize.x <= 0 || config.cudaTileSize.z <= 0) {
         if (error) {
-            *error = "maxBadBlocks must be non-negative";
+            *error = "cudaTileSize dimensions must be positive";
+        }
+        return false;
+    }
+
+    if (config.errorTolerance < 0) {
+        if (error) {
+            *error = "errorTolerance must be non-negative";
         }
         return false;
     }
@@ -484,7 +471,7 @@ bool loadScanConfig(const char* requestedPath, ScanConfig* config, std::string* 
         }
 
 
-        const std::string settingName = canonicalSettingName(line.key);
+        const std::string settingName = compactName(line.key);
         if (std::find(seenSettings.begin(), seenSettings.end(), settingName) != seenSettings.end()) {
             if (error) {
                 *error = linePrefix(path, line) + "duplicate setting '" + line.key + "'";

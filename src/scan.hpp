@@ -27,4 +27,8 @@ std::vector<RotationInfo> makeDirectionalFilter(
 
 std::uint64_t workItemCandidateCount(const WorkItem& item, bool* saturated = nullptr);
 
-bool makeScanPlan(const ScanConfig& config, ScanPlan* plan, std::string* error);
+bool makeScanPlan(
+    const ScanConfig& config,
+    TileSize tileSize,
+    ScanPlan* plan,
+    std::string* error);

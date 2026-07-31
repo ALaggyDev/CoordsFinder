@@ -65,24 +65,47 @@ scanOrder = linear
 scanOrder = spiral
 ```
 
-Tile sizes control scheduling granularity for both backends:
+Scan ranges are inclusive and use `(start, end)` pairs:
 
 ```ini
-tileSizeX = 1024
-tileSizeZ = 64
+xRange = (-5000, 5000)
+yRange = (-60, 0)
+zRange = (-5000, 5000)
 ```
 
-Older configs using `chunkBlocksX` and `chunkBlocksZ` remain supported. Their values are converted using the old eight-threads-per-axis layout.
+CPU and CUDA use independent tile sizes. CPU tiles are dynamically claimed worker
+tasks, while each CUDA tile is one kernel launch and result-buffer drain:
 
-## Texture modes
+```ini
+cpuTileSize = (1024, 1024)
+cudaTileSize = (16384, 16384)
 
-| Minecraft version | Mode |
+# Accept up to this many non-matching filter rows at a candidate.
+errorTolerance = 0
+
+# Log each work item as it starts, in addition to normal periodic progress.
+verbose = false
+```
+
+Large CUDA tiles reduce launch overhead but increase cancellation latency and may
+overflow the 65,536-match per-tile result buffer when the filter is loose. Reduce
+`cudaTileSize` if that occurs.
+
+## Algorithms
+
+Select the texture algorithm in the config:
+
+```ini
+algorithm = Vanilla-3
+```
+
+| Minecraft version | Algorithm |
 | --- | --- |
 | <= 1.12.2 | `Vanilla-1` |
 | 1.13-1.21.1 | `Vanilla-2` |
 | 1.21.2+ | `Vanilla-3` |
 
-| Sodium version | Minecraft version | Mode |
+| Sodium version | Minecraft version | Algorithm |
 | --- | --- | --- |
 | 1.0-4.1 | 1.16-1.18.2 | `Sodium-1` |
 | 4.2-4.8 | 1.19-1.19.3 | `Sodium-2` |

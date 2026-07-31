@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-enum class TextureMode : std::uint8_t {
+enum class TextureAlgorithm : std::uint8_t {
     Vanilla1,
     Vanilla2,
     Vanilla3,
@@ -16,18 +16,18 @@ enum class ScanOrder : std::uint8_t {
     Spiral,
 };
 
-inline const char* textureModeName(TextureMode mode)
+inline const char* textureAlgorithmName(TextureAlgorithm algorithm)
 {
-    switch (mode) {
-    case TextureMode::Vanilla1:
+    switch (algorithm) {
+    case TextureAlgorithm::Vanilla1:
         return "Vanilla-1";
-    case TextureMode::Vanilla2:
+    case TextureAlgorithm::Vanilla2:
         return "Vanilla-2";
-    case TextureMode::Vanilla3:
+    case TextureAlgorithm::Vanilla3:
         return "Vanilla-3";
-    case TextureMode::Sodium1:
+    case TextureAlgorithm::Sodium1:
         return "Sodium-1";
-    case TextureMode::Sodium2:
+    case TextureAlgorithm::Sodium2:
     default:
         return "Sodium-2";
     }
@@ -68,6 +68,6 @@ struct Match {
     std::int32_t x;
     std::int32_t y;
     std::int32_t z;
-    std::int32_t badBlocks;
+    std::int32_t mismatches;
     std::int32_t direction;
 };

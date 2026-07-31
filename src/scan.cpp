@@ -88,7 +88,11 @@ std::uint64_t workItemCandidateCount(const WorkItem& item, bool* saturated)
     return xyz;
 }
 
-bool makeScanPlan(const ScanConfig& config, ScanPlan* plan, std::string* error)
+bool makeScanPlan(
+    const ScanConfig& config,
+    TileSize tileSize,
+    ScanPlan* plan,
+    std::string* error)
 {
     if (!plan) {
         if (error) {
@@ -97,10 +101,17 @@ bool makeScanPlan(const ScanConfig& config, ScanPlan* plan, std::string* error)
         return false;
     }
 
-    const std::uint64_t xSpan = span(config.xStart, config.xEnd);
-    const std::uint64_t zSpan = span(config.zStart, config.zEnd);
-    const std::uint64_t tileX = static_cast<std::uint64_t>(config.tileSizeX);
-    const std::uint64_t tileZ = static_cast<std::uint64_t>(config.tileSizeZ);
+    if (tileSize.x <= 0 || tileSize.z <= 0) {
+        if (error) {
+            *error = "tile dimensions must be positive";
+        }
+        return false;
+    }
+
+    const std::uint64_t xSpan = span(config.xRange.start, config.xRange.end);
+    const std::uint64_t zSpan = span(config.zRange.start, config.zRange.end);
+    const std::uint64_t tileX = static_cast<std::uint64_t>(tileSize.x);
+    const std::uint64_t tileZ = static_cast<std::uint64_t>(tileSize.z);
     const std::uint64_t xTiles = 1 + (xSpan - 1) / tileX;
     const std::uint64_t zTiles = 1 + (zSpan - 1) / tileZ;
 
@@ -131,20 +142,20 @@ bool makeScanPlan(const ScanConfig& config, ScanPlan* plan, std::string* error)
 
     // Tiles are anchored at the minimum bounds; edge tiles are clipped inclusively.
     auto addTile = [&](std::uint64_t tileIndexX, std::uint64_t tileIndexZ, std::size_t directionIndex) {
-        const std::int64_t xStart = static_cast<std::int64_t>(config.xStart)
+        const std::int64_t xStart = static_cast<std::int64_t>(config.xRange.start)
             + static_cast<std::int64_t>(tileIndexX * tileX);
-        const std::int64_t zStart = static_cast<std::int64_t>(config.zStart)
+        const std::int64_t zStart = static_cast<std::int64_t>(config.zRange.start)
             + static_cast<std::int64_t>(tileIndexZ * tileZ);
         const std::int64_t xEnd = std::min<std::int64_t>(
-            xStart + config.tileSizeX - 1,
-            config.xEnd);
+            xStart + tileSize.x - 1,
+            config.xRange.end);
         const std::int64_t zEnd = std::min<std::int64_t>(
-            zStart + config.tileSizeZ - 1,
-            config.zEnd);
+            zStart + tileSize.z - 1,
+            config.zRange.end);
 
         WorkItem item = {
-            { static_cast<int>(xStart), config.yStart, static_cast<int>(zStart) },
-            { static_cast<int>(xEnd), config.yEnd, static_cast<int>(zEnd) },
+            { static_cast<int>(xStart), config.yRange.start, static_cast<int>(zStart) },
+            { static_cast<int>(xEnd), config.yRange.end, static_cast<int>(zEnd) },
             directionIndex,
             config.directions[directionIndex],
         };

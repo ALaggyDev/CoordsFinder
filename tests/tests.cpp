@@ -24,17 +24,14 @@ void expect(bool condition, const char* message)
 ScanConfig baseConfig()
 {
     ScanConfig config;
-    config.mode = TextureMode::Vanilla3;
+    config.algorithm = TextureAlgorithm::Vanilla3;
     config.directions = { 0 };
-    config.xStart = -2;
-    config.xEnd = 2;
-    config.yStart = 0;
-    config.yEnd = 0;
-    config.zStart = -2;
-    config.zEnd = 2;
-    config.tileSizeX = 1;
-    config.tileSizeZ = 1;
-    config.maxBadBlocks = 0;
+    config.xRange = { -2, 2 };
+    config.yRange = { 0, 0 };
+    config.zRange = { -2, 2 };
+    config.cpuTileSize = { 1, 1 };
+    config.cudaTileSize = { 1, 1 };
+    config.errorTolerance = 0;
     config.filter = { RotationInfo(0, 0, 0, 0) };
     return config;
 }
@@ -68,12 +65,12 @@ void testTextureGoldenVectors()
         { 353, -60, -53, { 2, 1, 0, 1, 3 } },
         { std::numeric_limits<int>::min(), 2147483647, 17, { 3, 0, 2, 3, 1 } },
     };
-    const TextureMode modes[] = {
-        TextureMode::Vanilla1,
-        TextureMode::Vanilla2,
-        TextureMode::Vanilla3,
-        TextureMode::Sodium1,
-        TextureMode::Sodium2,
+    const TextureAlgorithm modes[] = {
+        TextureAlgorithm::Vanilla1,
+        TextureAlgorithm::Vanilla2,
+        TextureAlgorithm::Vanilla3,
+        TextureAlgorithm::Sodium1,
+        TextureAlgorithm::Sodium2,
     };
 
     for (const Vector& vector : vectors) {
@@ -87,19 +84,18 @@ void testTextureGoldenVectors()
     expect(wrapAdd(std::numeric_limits<int>::min(), -1) == std::numeric_limits<int>::max(), "coordinate addition wraps at INT_MIN");
 }
 
-void testConfigCompatibility()
+void testConfigParsing()
 {
-    ScanConfig legacy;
     ScanConfig modern;
     std::string error;
     const std::string root = COORDSFINDER_SOURCE_DIR;
-    expect(loadScanConfig((root + "/tests/legacy.conf").c_str(), &legacy, &error), "load legacy chunk config");
-    expect(legacy.tileSizeX == 16 && legacy.tileSizeZ == 24, "convert legacy CUDA block sizes to tile sizes");
-    expect(legacy.scanOrder == ScanOrder::Linear, "legacy config defaults to linear order");
-    expect(loadScanConfig((root + "/tests/modern.conf").c_str(), &modern, &error), "load modern tile config");
-    expect(modern.tileSizeX == 7 && modern.tileSizeZ == 9, "load modern tile sizes");
+    expect(loadScanConfig((root + "/tests/modern.conf").c_str(), &modern, &error), "load backend-specific tile config");
+    expect(modern.cpuTileSize.x == 7 && modern.cpuTileSize.z == 9, "load CPU tile sizes");
+    expect(modern.cudaTileSize.x == 70 && modern.cudaTileSize.z == 90, "load CUDA tile sizes");
+    expect(modern.errorTolerance == 2, "load error tolerance");
+    expect(!modern.verbose, "load verbose setting");
     expect(modern.scanOrder == ScanOrder::Spiral, "load spiral scan order");
-    expect(!loadScanConfig((root + "/tests/invalid_duplicate.conf").c_str(), &modern, &error), "reject duplicate settings and aliases");
+    expect(!loadScanConfig((root + "/tests/invalid_duplicate.conf").c_str(), &modern, &error), "reject duplicate settings");
     expect(error.find("duplicate setting") != std::string::npos, "report duplicate setting clearly");
 }
 
@@ -111,7 +107,7 @@ void testScanOrders()
 
     config.scanOrder = ScanOrder::Spiral;
     ScanPlan spiral;
-    expect(makeScanPlan(config, &spiral, &error), "build spiral plan");
+    expect(makeScanPlan(config, config.cpuTileSize, &spiral, &error), "build spiral plan");
     expect(spiral.items.size() == 50, "spiral work-item count");
     expect(spiral.items[0].start.x == 0 && spiral.items[0].start.z == 0, "spiral starts at center");
     expect(spiral.items[0].direction == 0 && spiral.items[1].direction == 90, "spiral is tile-major across directions");
@@ -124,20 +120,17 @@ void testScanOrders()
 
     config.scanOrder = ScanOrder::Linear;
     ScanPlan linear;
-    expect(makeScanPlan(config, &linear, &error), "build linear plan");
+    expect(makeScanPlan(config, config.cpuTileSize, &linear, &error), "build linear plan");
     expect(linear.items[0].start.x == -2 && linear.items[0].start.z == -2, "linear starts at minimum bounds");
     expect(linear.items[24].direction == 0 && linear.items[25].direction == 90, "linear preserves direction-major order");
 
     config.directions = { 0 };
     config.scanOrder = ScanOrder::Spiral;
-    config.xStart = 0;
-    config.xEnd = 9;
-    config.zStart = -1;
-    config.zEnd = 0;
-    config.tileSizeX = 3;
-    config.tileSizeZ = 1;
+    config.xRange = { 0, 9 };
+    config.zRange = { -1, 0 };
+    config.cpuTileSize = { 3, 1 };
     ScanPlan rectangle;
-    expect(makeScanPlan(config, &rectangle, &error), "build non-square spiral plan");
+    expect(makeScanPlan(config, config.cpuTileSize, &rectangle, &error), "build non-square spiral plan");
     visited.clear();
     for (const WorkItem& item : rectangle.items) {
         visited.emplace(item.start.x, item.start.z, item.direction);
@@ -148,17 +141,14 @@ void testScanOrders()
 void testCpuScan()
 {
     ScanConfig config = baseConfig();
-    config.xStart = 17;
-    config.xEnd = 17;
-    config.yStart = -4;
-    config.yEnd = -4;
-    config.zStart = -31;
-    config.zEnd = -31;
-    config.filter[0].rotation = getTexture(config.mode, 17, -4, -31, 4);
+    config.xRange = { 17, 17 };
+    config.yRange = { -4, -4 };
+    config.zRange = { -31, -31 };
+    config.filter[0].rotation = getTexture(config.algorithm, 17, -4, -31, 4);
 
     ScanPlan plan;
     std::string error;
-    expect(makeScanPlan(config, &plan, &error), "build CPU test plan");
+    expect(makeScanPlan(config, config.cpuTileSize, &plan, &error), "build CPU test plan");
     ScanState state;
     std::vector<Match> matches;
     const bool succeeded = runCpuScan(
@@ -175,7 +165,7 @@ void testCpuScan()
     config = baseConfig();
     config.scanOrder = ScanOrder::Spiral;
     ScanPlan threadedPlan;
-    expect(makeScanPlan(config, &threadedPlan, &error), "build threaded CPU plan");
+    expect(makeScanPlan(config, config.cpuTileSize, &threadedPlan, &error), "build threaded CPU plan");
     ScanState threadedState;
     matches.clear();
     expect(runCpuScan(
@@ -187,9 +177,9 @@ void testCpuScan()
         &error), "run multithreaded CPU scan");
     std::set<std::tuple<int, int, int>> expected;
     std::set<std::tuple<int, int, int>> actual;
-    for (int z = config.zStart; z <= config.zEnd; ++z) {
-        for (int x = config.xStart; x <= config.xEnd; ++x) {
-            if (getTexture(config.mode, x, 0, z, 4) == 0) {
+    for (int z = config.zRange.start; z <= config.zRange.end; ++z) {
+        for (int x = config.xRange.start; x <= config.xRange.end; ++x) {
+            if (getTexture(config.algorithm, x, 0, z, 4) == 0) {
                 expected.emplace(x, 0, z);
             }
         }
@@ -206,7 +196,7 @@ int main()
 {
     testTextureGoldenVectors();
     testDirectionalFilter();
-    testConfigCompatibility();
+    testConfigParsing();
     testScanOrders();
     testCpuScan();
     if (failures != 0) {

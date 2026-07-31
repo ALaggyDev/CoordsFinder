@@ -19,11 +19,11 @@ constexpr unsigned int ResultCapacity = 65536;
 __device__ __constant__ RotationInfo deviceFilters[MaxDirectionCount][MaxFilterCount];
 __device__ __constant__ int deviceFilterCounts[MaxDirectionCount];
 
-template <TextureMode Mode>
+template <TextureAlgorithm Mode>
 __global__ void bruteForceKernel(
     Int3 start,
     Int3 end,
-    int maxBadBlocks,
+    int errorTolerance,
     std::size_t directionIndex,
     int direction,
     Match* results,
@@ -44,21 +44,21 @@ __global__ void bruteForceKernel(
     const std::int32_t x = static_cast<std::int32_t>(static_cast<std::int64_t>(start.x) + xOffset);
     const std::int32_t y = static_cast<std::int32_t>(static_cast<std::int64_t>(start.y) + yOffset);
     const std::int32_t z = static_cast<std::int32_t>(static_cast<std::int64_t>(start.z) + zOffset);
-    const int badBlocks = countBadBlocks<Mode>(
+    const int mismatches = countMismatches<Mode>(
         x,
         y,
         z,
         deviceFilters[directionIndex],
         static_cast<std::size_t>(deviceFilterCounts[directionIndex]),
-        maxBadBlocks);
-    if (badBlocks > maxBadBlocks) {
+        errorTolerance);
+    if (mismatches > errorTolerance) {
         return;
     }
 
     // Never silently lose matches: record capacity overflow for the host to report.
     const unsigned int index = atomicAdd(resultCount, 1U);
     if (index < ResultCapacity) {
-        results[index] = { x, y, z, badBlocks, direction };
+        results[index] = { x, y, z, mismatches, direction };
     }
     else {
         atomicExch(resultOverflow, 1);
@@ -81,10 +81,10 @@ bool check(cudaError_t result, const char* operation, std::string* error)
     return false;
 }
 
-template <TextureMode Mode>
+template <TextureAlgorithm Mode>
 cudaError_t launchMode(
     const WorkItem& item,
-    int maxBadBlocks,
+    int errorTolerance,
     dim3 grid,
     dim3 block,
     Match* results,
@@ -94,7 +94,7 @@ cudaError_t launchMode(
     bruteForceKernel<Mode><<<grid, block>>>(
         item.start,
         item.end,
-        maxBadBlocks,
+        errorTolerance,
         item.directionIndex,
         item.direction,
         results,
@@ -104,9 +104,9 @@ cudaError_t launchMode(
 }
 
 cudaError_t launch(
-    TextureMode mode,
+    TextureAlgorithm mode,
     const WorkItem& item,
-    int maxBadBlocks,
+    int errorTolerance,
     dim3 grid,
     dim3 block,
     Match* results,
@@ -114,17 +114,17 @@ cudaError_t launch(
     int* resultOverflow)
 {
     switch (mode) {
-    case TextureMode::Vanilla1:
-        return launchMode<TextureMode::Vanilla1>(item, maxBadBlocks, grid, block, results, resultCount, resultOverflow);
-    case TextureMode::Vanilla2:
-        return launchMode<TextureMode::Vanilla2>(item, maxBadBlocks, grid, block, results, resultCount, resultOverflow);
-    case TextureMode::Vanilla3:
-        return launchMode<TextureMode::Vanilla3>(item, maxBadBlocks, grid, block, results, resultCount, resultOverflow);
-    case TextureMode::Sodium1:
-        return launchMode<TextureMode::Sodium1>(item, maxBadBlocks, grid, block, results, resultCount, resultOverflow);
-    case TextureMode::Sodium2:
+    case TextureAlgorithm::Vanilla1:
+        return launchMode<TextureAlgorithm::Vanilla1>(item, errorTolerance, grid, block, results, resultCount, resultOverflow);
+    case TextureAlgorithm::Vanilla2:
+        return launchMode<TextureAlgorithm::Vanilla2>(item, errorTolerance, grid, block, results, resultCount, resultOverflow);
+    case TextureAlgorithm::Vanilla3:
+        return launchMode<TextureAlgorithm::Vanilla3>(item, errorTolerance, grid, block, results, resultCount, resultOverflow);
+    case TextureAlgorithm::Sodium1:
+        return launchMode<TextureAlgorithm::Sodium1>(item, errorTolerance, grid, block, results, resultCount, resultOverflow);
+    case TextureAlgorithm::Sodium2:
     default:
-        return launchMode<TextureMode::Sodium2>(item, maxBadBlocks, grid, block, results, resultCount, resultOverflow);
+        return launchMode<TextureAlgorithm::Sodium2>(item, errorTolerance, grid, block, results, resultCount, resultOverflow);
     }
 }
 }
@@ -201,7 +201,7 @@ bool runCudaScan(
         if (state->cancelRequested.load(std::memory_order_relaxed)) {
             break;
         }
-        if (config.printChunks) {
+        if (config.verbose) {
             std::fprintf(stderr,
                 "Scanning tile (%d, %d, %d) to (%d, %d, %d), direction %d.\n",
                 item.start.x,
@@ -225,7 +225,7 @@ bool runCudaScan(
             || grid.y > static_cast<unsigned int>(properties.maxGridSize[1])
             || grid.z > static_cast<unsigned int>(properties.maxGridSize[2])) {
             if (error) {
-                *error = "tile dimensions exceed this CUDA device's grid limits; reduce tileSizeX or tileSizeZ";
+                *error = "tile dimensions exceed this CUDA device's grid limits; reduce cudaTileSize";
             }
             succeeded = false;
             break;
@@ -234,7 +234,7 @@ bool runCudaScan(
         // One bounded buffer is reused and drained after each synchronized tile.
         if (!check(cudaMemset(deviceResultCount, 0, sizeof(unsigned int)), "reset result counter", error)
             || !check(cudaMemset(deviceResultOverflow, 0, sizeof(int)), "reset result overflow flag", error)
-            || !check(launch(config.mode, item, config.maxBadBlocks, grid, block, deviceResults, deviceResultCount, deviceResultOverflow), "launch CUDA scan", error)
+            || !check(launch(config.algorithm, item, config.errorTolerance, grid, block, deviceResults, deviceResultCount, deviceResultOverflow), "launch CUDA scan", error)
             || !check(cudaDeviceSynchronize(), "run CUDA scan", error)) {
             succeeded = false;
             break;
@@ -249,7 +249,7 @@ bool runCudaScan(
         }
         if (resultOverflow) {
             if (error) {
-                *error = "a tile produced more than 65536 matches; reduce tileSizeX/tileSizeZ or tighten the filter";
+                *error = "a tile produced more than 65536 matches; reduce cudaTileSize or tighten the filter";
             }
             succeeded = false;
             break;

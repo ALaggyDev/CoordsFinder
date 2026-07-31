@@ -151,11 +151,11 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::int32_t wrapAdd(std::int32_t value, std::int
         static_cast<std::uint32_t>(value) + static_cast<std::uint32_t>(static_cast<std::int32_t>(offset)));
 }
 
-template <TextureMode Mode>
+template <TextureAlgorithm Mode>
 struct TextureSampler;
 
 template <>
-struct TextureSampler<TextureMode::Vanilla1> {
+struct TextureSampler<TextureAlgorithm::Vanilla1> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::absoluteModulo(texture_detail::coordinateRandomLegacy(x, y, z), variants);
@@ -163,7 +163,7 @@ struct TextureSampler<TextureMode::Vanilla1> {
 };
 
 template <>
-struct TextureSampler<TextureMode::Vanilla2> {
+struct TextureSampler<TextureAlgorithm::Vanilla2> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::absoluteModulo(
@@ -172,7 +172,7 @@ struct TextureSampler<TextureMode::Vanilla2> {
 };
 
 template <>
-struct TextureSampler<TextureMode::Vanilla3> {
+struct TextureSampler<TextureAlgorithm::Vanilla3> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::legacyNextInt(texture_detail::coordinateRandom(x, y, z), variants);
@@ -180,7 +180,7 @@ struct TextureSampler<TextureMode::Vanilla3> {
 };
 
 template <>
-struct TextureSampler<TextureMode::Sodium1> {
+struct TextureSampler<TextureAlgorithm::Sodium1> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::absoluteModulo(
@@ -189,7 +189,7 @@ struct TextureSampler<TextureMode::Sodium1> {
 };
 
 template <>
-struct TextureSampler<TextureMode::Sodium2> {
+struct TextureSampler<TextureAlgorithm::Sodium2> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::absoluteModulo(
@@ -197,7 +197,7 @@ struct TextureSampler<TextureMode::Sodium2> {
     }
 };
 
-template <TextureMode Mode>
+template <TextureAlgorithm Mode>
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t getTextureForMode(
     std::int32_t x,
     std::int32_t y,
@@ -208,24 +208,24 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t getTextureForMode(
 }
 
 inline std::uint8_t getTexture(
-    TextureMode mode,
+    TextureAlgorithm mode,
     std::int32_t x,
     std::int32_t y,
     std::int32_t z,
     std::uint8_t variants)
 {
     switch (mode) {
-    case TextureMode::Vanilla1:
-        return getTextureForMode<TextureMode::Vanilla1>(x, y, z, variants);
-    case TextureMode::Vanilla2:
-        return getTextureForMode<TextureMode::Vanilla2>(x, y, z, variants);
-    case TextureMode::Vanilla3:
-        return getTextureForMode<TextureMode::Vanilla3>(x, y, z, variants);
-    case TextureMode::Sodium1:
-        return getTextureForMode<TextureMode::Sodium1>(x, y, z, variants);
-    case TextureMode::Sodium2:
+    case TextureAlgorithm::Vanilla1:
+        return getTextureForMode<TextureAlgorithm::Vanilla1>(x, y, z, variants);
+    case TextureAlgorithm::Vanilla2:
+        return getTextureForMode<TextureAlgorithm::Vanilla2>(x, y, z, variants);
+    case TextureAlgorithm::Vanilla3:
+        return getTextureForMode<TextureAlgorithm::Vanilla3>(x, y, z, variants);
+    case TextureAlgorithm::Sodium1:
+        return getTextureForMode<TextureAlgorithm::Sodium1>(x, y, z, variants);
+    case TextureAlgorithm::Sodium2:
     default:
-        return getTextureForMode<TextureMode::Sodium2>(x, y, z, variants);
+        return getTextureForMode<TextureAlgorithm::Sodium2>(x, y, z, variants);
     }
 }
 

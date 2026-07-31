@@ -16,16 +16,16 @@
 #define CF_MATCHER_INLINE inline __attribute__((always_inline))
 #endif
 
-template <TextureMode Mode>
-CF_MATCHER_HOST_DEVICE CF_MATCHER_INLINE int countBadBlocks(
+template <TextureAlgorithm Mode>
+CF_MATCHER_HOST_DEVICE CF_MATCHER_INLINE int countMismatches(
     std::int32_t x,
     std::int32_t y,
     std::int32_t z,
     const RotationInfo* filter,
     std::size_t filterCount,
-    int maxBadBlocks)
+    int errorTolerance)
 {
-    int badBlocks = 0;
+    int mismatches = 0;
     // CPU and CUDA share this early-exit rule, keeping tolerance semantics identical.
     for (std::size_t i = 0; i < filterCount; ++i) {
         const RotationInfo info = filter[i];
@@ -34,11 +34,11 @@ CF_MATCHER_HOST_DEVICE CF_MATCHER_INLINE int countBadBlocks(
             wrapAdd(y, info.y),
             wrapAdd(z, info.z),
             4);
-        if ((variant & info.visibleMask) != info.rotation && ++badBlocks > maxBadBlocks) {
+        if ((variant & info.visibleMask) != info.rotation && ++mismatches > errorTolerance) {
             break;
         }
     }
-    return badBlocks;
+    return mismatches;
 }
 
 #undef CF_MATCHER_HOST_DEVICE

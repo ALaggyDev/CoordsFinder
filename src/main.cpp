@@ -79,6 +79,18 @@ const char* scanOrderName(ScanOrder order)
 {
     return order == ScanOrder::Spiral ? "spiral" : "linear";
 }
+
+void printPlanSummary(FILE* output, const char* label, const ScanPlan& plan)
+{
+    std::fprintf(output, "%s plan: %zu work items; candidates: ", label, plan.items.size());
+    if (plan.totalCandidatesSaturated) {
+        std::fprintf(output, ">= %llu (display saturated).\n",
+            static_cast<unsigned long long>(plan.totalCandidates));
+    }
+    else {
+        std::fprintf(output, "%llu.\n", static_cast<unsigned long long>(plan.totalCandidates));
+    }
+}
 }
 
 int main(int argc, char** argv)
@@ -145,31 +157,26 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    ScanPlan plan;
-    if (!makeScanPlan(config, &plan, &error)) {
-        std::fprintf(stderr, "Scan plan error: %s\n", error.c_str());
-        return 1;
-    }
-
     FILE* summary = validateOnly ? stdout : stderr;
     std::fprintf(summary, "Loaded %s with %zu filters and %zu direction(s).\n",
         config.sourcePath.c_str(),
         config.filter.size(),
         config.directions.size());
-    std::fprintf(summary, "Mode: %s; order: %s; work items: %zu; candidates: ",
-        textureModeName(config.mode),
-        scanOrderName(config.scanOrder),
-        plan.items.size());
-    if (plan.totalCandidatesSaturated) {
-        std::fprintf(summary, ">= %llu (display saturated).\n",
-            static_cast<unsigned long long>(plan.totalCandidates));
-    }
-    else {
-        std::fprintf(summary, "%llu.\n", static_cast<unsigned long long>(plan.totalCandidates));
-    }
+    std::fprintf(summary, "Algorithm: %s; order: %s.\n",
+        textureAlgorithmName(config.algorithm),
+        scanOrderName(config.scanOrder));
 
     if (validateOnly) {
-        std::printf("Config and scan plan are valid.\n");
+        ScanPlan cpuPlan;
+        ScanPlan cudaPlan;
+        if (!makeScanPlan(config, config.cpuTileSize, &cpuPlan, &error)
+            || !makeScanPlan(config, config.cudaTileSize, &cudaPlan, &error)) {
+            std::fprintf(stderr, "Scan plan error: %s\n", error.c_str());
+            return 1;
+        }
+        printPlanSummary(stdout, "CPU", cpuPlan);
+        printPlanSummary(stdout, "CUDA", cudaPlan);
+        std::printf("Config and backend plans are valid.\n");
         return 0;
     }
 
@@ -193,6 +200,16 @@ int main(int argc, char** argv)
     backend = Backend::Cpu;
 #endif
 
+    const TileSize tileSize = backend == Backend::Cuda
+        ? config.cudaTileSize
+        : config.cpuTileSize;
+    ScanPlan plan;
+    if (!makeScanPlan(config, tileSize, &plan, &error)) {
+        std::fprintf(stderr, "Scan plan error: %s\n", error.c_str());
+        return 1;
+    }
+    printPlanSummary(stderr, backend == Backend::Cuda ? "CUDA" : "CPU", plan);
+
     std::fprintf(stderr, "Backend: %s", backend == Backend::Cuda ? "CUDA" : "CPU");
     if (backend == Backend::Cpu) {
         if (threadCount == 0) {
@@ -215,8 +232,8 @@ int main(int argc, char** argv)
     // Only matches go to stdout; status and progress remain pipe-safe on stderr.
     const MatchSink sink = [](const std::vector<Match>& matches) {
         for (const Match& match : matches) {
-            std::printf("Found with %d bad block(s)! (%d, %d, %d), direction %d\n",
-                match.badBlocks,
+            std::printf("Found with %d mismatch(es)! (%d, %d, %d), direction %d\n",
+                match.mismatches,
                 match.x,
                 match.y,
                 match.z,
@@ -234,9 +251,6 @@ int main(int argc, char** argv)
         while (!progressWake.wait_for(lock, std::chrono::seconds(1), [&] {
             return !running.load(std::memory_order_relaxed);
         })) {
-            if (config.printChunks) {
-                continue;
-            }
             const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             const std::uint64_t candidates = state.candidates.load(std::memory_order_relaxed);
             const double rate = elapsed > 0.0 ? static_cast<double>(candidates) / elapsed : 0.0;

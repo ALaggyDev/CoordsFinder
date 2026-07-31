@@ -5,22 +5,30 @@
 
 #include "types.hpp"
 
+struct TileSize {
+    int x;
+    int z;
+};
+
+struct IntRange {
+    int start;
+    int end;
+};
+
 struct ScanConfig {
-    TextureMode mode = TextureMode::Vanilla3;
+    TextureAlgorithm algorithm = TextureAlgorithm::Vanilla3;
     ScanOrder scanOrder = ScanOrder::Linear;
     std::vector<int> directions = { 0 };
 
-    int xStart;
-    int xEnd;
-    int yStart;
-    int yEnd;
-    int zStart;
-    int zEnd;
+    IntRange xRange;
+    IntRange yRange;
+    IntRange zRange;
 
-    int tileSizeX = 1024;
-    int tileSizeZ = 1024;
-    int maxBadBlocks = 0;
-    bool printChunks = false;
+    int errorTolerance = 0;
+
+    TileSize cpuTileSize = { 1024, 1024 };
+    TileSize cudaTileSize = { 16384, 16384 };
+    bool verbose = false;
 
     std::vector<RotationInfo> filter;
     std::string sourcePath;
