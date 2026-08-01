@@ -36,16 +36,16 @@ __global__ void bruteForceKernel(
     const std::uint32_t xOffset = blockIdx.x * blockDim.x + threadIdx.x;
     const std::uint32_t yOffset = blockIdx.y * blockDim.y + threadIdx.y;
     const std::uint32_t zOffset = blockIdx.z * blockDim.z + threadIdx.z;
-    const std::uint32_t xCount = static_cast<std::uint32_t>(end.x) - static_cast<std::uint32_t>(start.x) + 1U;
-    const std::uint32_t yCount = static_cast<std::uint32_t>(end.y) - static_cast<std::uint32_t>(start.y) + 1U;
-    const std::uint32_t zCount = static_cast<std::uint32_t>(end.z) - static_cast<std::uint32_t>(start.z) + 1U;
+    const std::uint32_t xCount = static_cast<std::uint32_t>(end.x - start.x) + 1U;
+    const std::uint32_t yCount = static_cast<std::uint32_t>(end.y - start.y) + 1U;
+    const std::uint32_t zCount = static_cast<std::uint32_t>(end.z - start.z) + 1U;
     if (xOffset >= xCount || yOffset >= yCount || zOffset >= zCount) {
         return;
     }
 
-    const std::int32_t x = static_cast<std::int32_t>(static_cast<std::uint32_t>(start.x) + xOffset);
-    const std::int32_t y = static_cast<std::int32_t>(static_cast<std::uint32_t>(start.y) + yOffset);
-    const std::int32_t z = static_cast<std::int32_t>(static_cast<std::uint32_t>(start.z) + zOffset);
+    const std::int32_t x = start.x + static_cast<std::int32_t>(xOffset);
+    const std::int32_t y = start.y + static_cast<std::int32_t>(yOffset);
+    const std::int32_t z = start.z + static_cast<std::int32_t>(zOffset);
     const int mismatches = countMismatches<Mode>(
         x,
         y,
@@ -215,9 +215,9 @@ bool runCudaScan(
                 item.direction);
         }
 
-        const std::uint32_t xCount = static_cast<std::uint32_t>(item.end.x) - static_cast<std::uint32_t>(item.start.x) + 1U;
-        const std::uint32_t yCount = static_cast<std::uint32_t>(item.end.y) - static_cast<std::uint32_t>(item.start.y) + 1U;
-        const std::uint32_t zCount = static_cast<std::uint32_t>(item.end.z) - static_cast<std::uint32_t>(item.start.z) + 1U;
+        const std::uint32_t xCount = static_cast<std::uint32_t>(item.end.x - item.start.x) + 1U;
+        const std::uint32_t yCount = static_cast<std::uint32_t>(item.end.y - item.start.y) + 1U;
+        const std::uint32_t zCount = static_cast<std::uint32_t>(item.end.z - item.start.z) + 1U;
         if (xCount == 0 || yCount == 0 || zCount == 0) {
             if (error) {
                 *error = "a CUDA tile spans the full 32-bit coordinate range; reduce cudaTileSize or the coordinate range";

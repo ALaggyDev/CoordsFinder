@@ -15,46 +15,37 @@
 #define CF_FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
+// This file is ... written in a complex way. The reasons for this complexity are mainly due to:
+// - Signed integer overflow is considered as an undefined behaviour in C/C++ (which I completely disagree with).
+//     As a result, most of the math operations are done in unsigned instead of signed integers.
+//     Special sign extend and wrap add functions are needed to circumvent this issue.
+//
+// - static_cast<...>(...) is very verbose. I would very much appreciate the classic C cast, but
+//     unfortunately this is C++ and the "recommended way to write C++" is apparently to use static_cast.
+//
+// - If it wasn't obvious enough, a majority of the code is written by AIs.
+//     AIs apparently prefer absolutely-correct code over clean code.
+//
+// In short, blame C/C++ and AIs.
+//
+// Reference: https://github.com/19MisterX98/TextureRotations/tree/master/src/main/java/texture
+
 namespace texture_detail {
 constexpr std::uint64_t JavaMultiplier = 0x5DEECE66DULL;
 constexpr std::uint64_t JavaMask = (1ULL << 48) - 1;
 constexpr std::uint64_t SodiumPhi = 0x9E3779B97F4A7C15ULL;
 
-// Supported host and CUDA compilers preserve the two's-complement bit pattern
-// when narrowing to int32_t; widening then restores Java's signed long input.
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t signExtend32(std::uint32_t bits)
 {
     return static_cast<std::uint64_t>(
         static_cast<std::int64_t>(static_cast<std::int32_t>(bits)));
 }
 
-CF_HOST_DEVICE CF_FORCE_INLINE std::int32_t signed32(std::uint32_t bits)
+CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t absoluteModulo(std::int32_t value, std::uint8_t mod)
 {
-    return bits <= 0x7FFFFFFFU
-        ? static_cast<std::int32_t>(bits)
-        : -1 - static_cast<std::int32_t>(~bits);
-}
-
-CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t arithmeticShiftRight64(std::uint64_t bits, int distance)
-{
-    const std::uint64_t shifted = bits >> distance;
-    return (bits & (1ULL << 63))
-        ? shifted | (~0ULL << (64 - distance))
-        : shifted;
-}
-
-CF_HOST_DEVICE CF_FORCE_INLINE std::uint32_t arithmeticShiftRight32(std::uint32_t bits, int distance)
-{
-    const std::uint32_t shifted = bits >> distance;
-    return (bits & (1U << 31))
-        ? shifted | (~0U << (32 - distance))
-        : shifted;
-}
-
-CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t absoluteModulo(std::uint32_t bits, std::uint8_t mod)
-{
-    // Widened magnitude preserves the scanner's behavior for INT32_MIN.
-    const std::uint32_t magnitude = (bits & 0x80000000U) ? 0U - bits : bits;
+    // Widen before negating so INT32_MIN remains representable.
+    const std::uint32_t magnitude = static_cast<std::uint32_t>(
+        value < 0 ? -static_cast<std::int64_t>(value) : value);
     return static_cast<std::uint8_t>(magnitude % mod);
 }
 
@@ -84,12 +75,14 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t coordinateRandomRaw(std::int32_t x,
 
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint32_t coordinateRandomLegacy(std::int32_t x, std::int32_t y, std::int32_t z)
 {
-    return arithmeticShiftRight32(static_cast<std::uint32_t>(coordinateRandomRaw(x, y, z)), 16);
+    return static_cast<std::uint32_t>(
+        static_cast<std::int32_t>(coordinateRandomRaw(x, y, z)) >> 16);
 }
 
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t coordinateRandom(std::int32_t x, std::int32_t y, std::int32_t z)
 {
-    return arithmeticShiftRight64(coordinateRandomRaw(x, y, z), 16);
+    return static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(coordinateRandomRaw(x, y, z)) >> 16);
 }
 
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint32_t randomVanilla2(std::uint64_t seed)
@@ -115,7 +108,7 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t legacyNextInt(std::uint64_t seed, st
 
     std::uint32_t bits = legacyNextBits(seed, 31);
     std::uint32_t value = bits % intBound;
-    while (static_cast<std::int64_t>(bits) - value + (intBound - 1) < 0) {
+    while (static_cast<std::int32_t>(bits - value + intBound - 1) < 0) {
         bits = legacyNextBits(seed, 31);
         value = bits % intBound;
     }
@@ -148,8 +141,8 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint32_t randomSodium2(std::uint64_t seed)
 CF_HOST_DEVICE CF_FORCE_INLINE std::int32_t wrapAdd(std::int32_t value, std::int8_t offset)
 {
     // Candidate-plus-filter coordinates follow Java int overflow at world limits.
-    return texture_detail::signed32(
-        static_cast<std::uint32_t>(value) + static_cast<std::uint32_t>(static_cast<std::int32_t>(offset)));
+    return static_cast<std::int32_t>(
+        static_cast<std::uint32_t>(value) + static_cast<std::uint32_t>(offset));
 }
 
 template <TextureAlgorithm Mode>
@@ -159,7 +152,8 @@ template <>
 struct TextureSampler<TextureAlgorithm::Vanilla1> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
-        return texture_detail::absoluteModulo(texture_detail::coordinateRandomLegacy(x, y, z), variants);
+        return texture_detail::absoluteModulo(
+            static_cast<std::int32_t>(texture_detail::coordinateRandomLegacy(x, y, z)), variants);
     }
 };
 
@@ -168,7 +162,7 @@ struct TextureSampler<TextureAlgorithm::Vanilla2> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::absoluteModulo(
-            texture_detail::randomVanilla2(texture_detail::coordinateRandom(x, y, z)), variants);
+            static_cast<std::int32_t>(texture_detail::randomVanilla2(texture_detail::coordinateRandom(x, y, z))), variants);
     }
 };
 
@@ -185,7 +179,7 @@ struct TextureSampler<TextureAlgorithm::Sodium1> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::absoluteModulo(
-            texture_detail::randomSodium1(texture_detail::coordinateRandom(x, y, z)), variants);
+            static_cast<std::int32_t>(texture_detail::randomSodium1(texture_detail::coordinateRandom(x, y, z))), variants);
     }
 };
 
@@ -194,7 +188,7 @@ struct TextureSampler<TextureAlgorithm::Sodium2> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
         return texture_detail::absoluteModulo(
-            texture_detail::randomSodium2(texture_detail::coordinateRandom(x, y, z)), variants);
+            static_cast<std::int32_t>(texture_detail::randomSodium2(texture_detail::coordinateRandom(x, y, z))), variants);
     }
 };
 

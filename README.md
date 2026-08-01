@@ -9,7 +9,7 @@ CoordsFinder supports a multithreaded CPU backend and a CUDA backend. CUDA is an
 Requirements:
 
 - CMake 3.24 or newer
-- A C++17 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
+- A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
 - Optional: NVIDIA CUDA Toolkit for the CUDA backend
 
 The repository includes two presets. Configure once, then build whenever the source changes.

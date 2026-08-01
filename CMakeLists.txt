@@ -16,7 +16,7 @@ add_library(coordsfinder_core STATIC
     src/cpu_backend.cpp
     src/scan.cpp)
 target_include_directories(coordsfinder_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_features(coordsfinder_core PUBLIC cxx_std_17)
+target_compile_features(coordsfinder_core PUBLIC cxx_std_20)
 target_link_libraries(coordsfinder_core PUBLIC Threads::Threads)
 
 add_executable(coordsfinder src/main.cpp)
@@ -32,7 +32,7 @@ if(COORDSFINDER_ENABLE_CUDA)
     target_sources(coordsfinder PRIVATE src/cuda_backend.cu)
     target_compile_definitions(coordsfinder PRIVATE COORDSFINDER_HAS_CUDA=1)
     set_target_properties(coordsfinder PROPERTIES
-        CUDA_STANDARD 17
+        CUDA_STANDARD 20
         CUDA_STANDARD_REQUIRED YES)
     if(MSVC)
         target_compile_options(coordsfinder PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
