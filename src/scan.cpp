@@ -71,6 +71,11 @@ std::vector<RotationInfo> makeDirectionalFilter(
         }
         result.push_back(info);
     }
+    // Four-state samples reject three quarters of candidates, ahead of two-state side samples.
+    // Preserve the config order within each group so equivalent filters remain deterministic.
+    std::stable_sort(result.begin(), result.end(), [](const RotationInfo& lhs, const RotationInfo& rhs) {
+        return lhs.visibleMask > rhs.visibleMask;
+    });
     return result;
 }
 

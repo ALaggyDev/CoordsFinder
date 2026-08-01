@@ -12,7 +12,9 @@
 #include "matcher.hpp"
 
 namespace {
-constexpr unsigned int ThreadsPerAxis = 8;
+constexpr unsigned int ThreadsX = 16;
+constexpr unsigned int ThreadsY = 1;
+constexpr unsigned int ThreadsZ = 16;
 constexpr unsigned int ResultCapacity = 65536;
 
 // All transformed direction filters fit comfortably in CUDA constant memory.
@@ -30,20 +32,20 @@ __global__ void bruteForceKernel(
     unsigned int* resultCount,
     int* resultOverflow)
 {
-    // Offsets use 64 bits so indexing remains safe near INT32_MIN and INT32_MAX.
-    const std::uint64_t xOffset = static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const std::uint64_t yOffset = static_cast<std::uint64_t>(blockIdx.y) * blockDim.y + threadIdx.y;
-    const std::uint64_t zOffset = static_cast<std::uint64_t>(blockIdx.z) * blockDim.z + threadIdx.z;
-    const std::uint64_t xCount = static_cast<std::uint64_t>(static_cast<std::int64_t>(end.x) - start.x) + 1;
-    const std::uint64_t yCount = static_cast<std::uint64_t>(static_cast<std::int64_t>(end.y) - start.y) + 1;
-    const std::uint64_t zCount = static_cast<std::uint64_t>(static_cast<std::int64_t>(end.z) - start.z) + 1;
+    // Tiles are limited to 32-bit spans; keep coordinate indexing in the fast 32-bit path.
+    const std::uint32_t xOffset = blockIdx.x * blockDim.x + threadIdx.x;
+    const std::uint32_t yOffset = blockIdx.y * blockDim.y + threadIdx.y;
+    const std::uint32_t zOffset = blockIdx.z * blockDim.z + threadIdx.z;
+    const std::uint32_t xCount = static_cast<std::uint32_t>(end.x) - static_cast<std::uint32_t>(start.x) + 1U;
+    const std::uint32_t yCount = static_cast<std::uint32_t>(end.y) - static_cast<std::uint32_t>(start.y) + 1U;
+    const std::uint32_t zCount = static_cast<std::uint32_t>(end.z) - static_cast<std::uint32_t>(start.z) + 1U;
     if (xOffset >= xCount || yOffset >= yCount || zOffset >= zCount) {
         return;
     }
 
-    const std::int32_t x = static_cast<std::int32_t>(static_cast<std::int64_t>(start.x) + xOffset);
-    const std::int32_t y = static_cast<std::int32_t>(static_cast<std::int64_t>(start.y) + yOffset);
-    const std::int32_t z = static_cast<std::int32_t>(static_cast<std::int64_t>(start.z) + zOffset);
+    const std::int32_t x = static_cast<std::int32_t>(static_cast<std::uint32_t>(start.x) + xOffset);
+    const std::int32_t y = static_cast<std::int32_t>(static_cast<std::uint32_t>(start.y) + yOffset);
+    const std::int32_t z = static_cast<std::int32_t>(static_cast<std::uint32_t>(start.z) + zOffset);
     const int mismatches = countMismatches<Mode>(
         x,
         y,
@@ -213,14 +215,21 @@ bool runCudaScan(
                 item.direction);
         }
 
-        const std::uint64_t xCount = static_cast<std::uint64_t>(static_cast<std::int64_t>(item.end.x) - item.start.x) + 1;
-        const std::uint64_t yCount = static_cast<std::uint64_t>(static_cast<std::int64_t>(item.end.y) - item.start.y) + 1;
-        const std::uint64_t zCount = static_cast<std::uint64_t>(static_cast<std::int64_t>(item.end.z) - item.start.z) + 1;
-        const dim3 block(ThreadsPerAxis, ThreadsPerAxis, ThreadsPerAxis);
+        const std::uint32_t xCount = static_cast<std::uint32_t>(item.end.x) - static_cast<std::uint32_t>(item.start.x) + 1U;
+        const std::uint32_t yCount = static_cast<std::uint32_t>(item.end.y) - static_cast<std::uint32_t>(item.start.y) + 1U;
+        const std::uint32_t zCount = static_cast<std::uint32_t>(item.end.z) - static_cast<std::uint32_t>(item.start.z) + 1U;
+        if (xCount == 0 || yCount == 0 || zCount == 0) {
+            if (error) {
+                *error = "a CUDA tile spans the full 32-bit coordinate range; reduce cudaTileSize or the coordinate range";
+            }
+            succeeded = false;
+            break;
+        }
+        const dim3 block(ThreadsX, ThreadsY, ThreadsZ);
         const dim3 grid(
-            static_cast<unsigned int>((xCount + ThreadsPerAxis - 1) / ThreadsPerAxis),
-            static_cast<unsigned int>((yCount + ThreadsPerAxis - 1) / ThreadsPerAxis),
-            static_cast<unsigned int>((zCount + ThreadsPerAxis - 1) / ThreadsPerAxis));
+            1U + (xCount - 1U) / ThreadsX,
+            1U + (yCount - 1U) / ThreadsY,
+            1U + (zCount - 1U) / ThreadsZ);
         if (grid.x > static_cast<unsigned int>(properties.maxGridSize[0])
             || grid.y > static_cast<unsigned int>(properties.maxGridSize[1])
             || grid.z > static_cast<unsigned int>(properties.maxGridSize[2])) {

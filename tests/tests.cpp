@@ -47,6 +47,15 @@ void testDirectionalFilter()
     expect(rotated[0].rotation == 2, "top-face variant rotation");
     expect(rotated[1].x == -5 && rotated[1].z == -1, "side XZ rotation");
     expect(rotated[1].rotation == 1, "side variant remains unchanged");
+
+    const std::vector<RotationInfo> ordered = makeDirectionalFilter({
+        RotationInfo(1, 0, 0, 0, true),
+        RotationInfo(2, 0, 0, 0),
+        RotationInfo(3, 0, 0, 1, true),
+        RotationInfo(4, 0, 0, 1),
+    }, 0);
+    expect(ordered[0].x == 2 && ordered[1].x == 4, "four-state filters are ordered first");
+    expect(ordered[2].x == 1 && ordered[3].x == 3, "filter ordering remains stable within rejection groups");
 }
 
 void testTextureGoldenVectors()
