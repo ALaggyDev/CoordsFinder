@@ -28,7 +28,7 @@ CF_MATCHER_HOST_DEVICE CF_MATCHER_INLINE int countMismatches(
     int mismatches = 0;
     // CPU and CUDA share this early-exit rule, keeping tolerance semantics identical.
     for (std::size_t i = 0; i < filterCount; ++i) {
-        const RotationInfo info = filter[i];
+        const RotationInfo& info = filter[i];
         const std::uint8_t variant = getTextureForMode<Mode>(
             wrapAdd(x, info.x),
             wrapAdd(y, info.y),

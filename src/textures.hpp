@@ -20,11 +20,12 @@ constexpr std::uint64_t JavaMultiplier = 0x5DEECE66DULL;
 constexpr std::uint64_t JavaMask = (1ULL << 48) - 1;
 constexpr std::uint64_t SodiumPhi = 0x9E3779B97F4A7C15ULL;
 
-// RNG values remain unsigned bit patterns so Java's wrapping arithmetic is
-// well-defined in C++ on both host compilers and CUDA devices.
+// Supported host and CUDA compilers preserve the two's-complement bit pattern
+// when narrowing to int32_t; widening then restores Java's signed long input.
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t signExtend32(std::uint32_t bits)
 {
-    return (bits & 0x80000000U) ? (0xFFFFFFFF00000000ULL | bits) : bits;
+    return static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(static_cast<std::int32_t>(bits)));
 }
 
 CF_HOST_DEVICE CF_FORCE_INLINE std::int32_t signed32(std::uint32_t bits)
