@@ -5,10 +5,34 @@
 #include <mutex>
 #include <thread>
 
-#include "matcher.hpp"
+#include "textures.hpp"
 
 namespace {
 constexpr std::size_t ResultBatchSize = 256;
+
+template <TextureAlgorithm Mode>
+int countMismatches(
+    std::int32_t x,
+    std::int32_t y,
+    std::int32_t z,
+    const RotationInfo* filter,
+    std::size_t filterCount,
+    int errorTolerance)
+{
+    int mismatches = 0;
+    for (std::size_t i = 0; i < filterCount; ++i) {
+        const RotationInfo& info = filter[i];
+        const std::uint8_t variant = getTextureForMode<Mode>(
+            wrapAdd(x, info.x),
+            wrapAdd(y, info.y),
+            wrapAdd(z, info.z),
+            4);
+        if ((variant & info.visibleMask) != info.rotation && ++mismatches > errorTolerance) {
+            break;
+        }
+    }
+    return mismatches;
+}
 
 template <TextureAlgorithm Mode>
 void scanWorkItem(

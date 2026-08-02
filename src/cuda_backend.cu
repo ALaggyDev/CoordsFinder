@@ -9,12 +9,12 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include "matcher.hpp"
+#include "textures.hpp"
 
 namespace {
 constexpr unsigned int ThreadsX = 16;
-constexpr unsigned int ThreadsY = 1;
 constexpr unsigned int ThreadsZ = 16;
+constexpr unsigned int CandidatesPerThreadY = 16;
 constexpr unsigned int ResultCapacity = 65536;
 
 // All transformed direction filters fit comfortably in CUDA constant memory.
@@ -32,38 +32,61 @@ __global__ void bruteForceKernel(
     unsigned int* resultCount,
     int* resultOverflow)
 {
-    // Tiles are limited to 32-bit spans; keep coordinate indexing in the fast 32-bit path.
+    // Tiles are limited to 32-bit spans.
+    // A thread owns a short vertical column of at most CandidatesPerThreadY blocks.
     const std::uint32_t xOffset = blockIdx.x * blockDim.x + threadIdx.x;
-    const std::uint32_t yOffset = blockIdx.y * blockDim.y + threadIdx.y;
+    const std::uint32_t yBaseOffset = blockIdx.y * CandidatesPerThreadY;
     const std::uint32_t zOffset = blockIdx.z * blockDim.z + threadIdx.z;
-    const std::uint32_t xCount = static_cast<std::uint32_t>(end.x - start.x) + 1U;
-    const std::uint32_t yCount = static_cast<std::uint32_t>(end.y - start.y) + 1U;
-    const std::uint32_t zCount = static_cast<std::uint32_t>(end.z - start.z) + 1U;
-    if (xOffset >= xCount || yOffset >= yCount || zOffset >= zCount) {
-        return;
-    }
 
     const std::int32_t x = start.x + static_cast<std::int32_t>(xOffset);
-    const std::int32_t y = start.y + static_cast<std::int32_t>(yOffset);
+    std::int32_t y = start.y + static_cast<std::int32_t>(yBaseOffset);
     const std::int32_t z = start.z + static_cast<std::int32_t>(zOffset);
-    const int mismatches = countMismatches<Mode>(
-        x,
-        y,
-        z,
-        deviceFilters[directionIndex],
-        static_cast<std::size_t>(deviceFilterCounts[directionIndex]),
-        errorTolerance);
-    if (mismatches > errorTolerance) {
+
+    if (x > end.x || z > end.z) {
         return;
     }
 
-    // Never silently lose matches: record capacity overflow for the host to report.
-    const unsigned int index = atomicAdd(resultCount, 1U);
-    if (index < ResultCapacity) {
-        results[index] = { x, y, z, mismatches, direction };
-    }
-    else {
-        atomicExch(resultOverflow, 1);
+    const std::int32_t yEnd = y + static_cast<std::int32_t>(CandidatesPerThreadY) < end.y + 1
+        ? y + static_cast<std::int32_t>(CandidatesPerThreadY)
+        : end.y + 1;
+
+    const int filterCount = deviceFilterCounts[directionIndex];
+
+    int filterIndex = 0;
+    int mismatches = 0;
+    while (y < yEnd) {
+        const RotationInfo& info = deviceFilters[directionIndex][filterIndex];
+        const std::uint8_t variant = getTextureForMode<Mode>(
+            wrapAdd(x, info.x),
+            wrapAdd(y, info.y),
+            wrapAdd(z, info.z),
+            4);
+
+        if ((variant & info.visibleMask) != info.rotation) {
+            ++mismatches;
+        }
+
+        ++filterIndex;
+
+        if (mismatches > errorTolerance) {
+            ++y;
+            filterIndex = 0;
+            mismatches = 0;
+        }
+
+        if (filterIndex == filterCount) {
+            // Never silently lose matches: record capacity overflow for the host to report.
+            const unsigned int index = atomicAdd(resultCount, 1U);
+            if (index < ResultCapacity) {
+                results[index] = { x, y, z, mismatches, direction };
+            }
+            else {
+                atomicExch(resultOverflow, 1);
+            }
+            ++y;
+            filterIndex = 0;
+            mismatches = 0;
+        }
     }
 }
 
@@ -225,10 +248,10 @@ bool runCudaScan(
             succeeded = false;
             break;
         }
-        const dim3 block(ThreadsX, ThreadsY, ThreadsZ);
+        const dim3 block(ThreadsX, 1, ThreadsZ);
         const dim3 grid(
             1U + (xCount - 1U) / ThreadsX,
-            1U + (yCount - 1U) / ThreadsY,
+            1U + (yCount - 1U) / CandidatesPerThreadY,
             1U + (zCount - 1U) / ThreadsZ);
         if (grid.x > static_cast<unsigned int>(properties.maxGridSize[0])
             || grid.y > static_cast<unsigned int>(properties.maxGridSize[1])
