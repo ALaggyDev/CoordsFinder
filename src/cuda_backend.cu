@@ -42,13 +42,13 @@ __global__ void bruteForceKernel(
     std::int32_t y = start.y + static_cast<std::int32_t>(yBaseOffset);
     const std::int32_t z = start.z + static_cast<std::int32_t>(zOffset);
 
-    if (x > end.x || z > end.z) {
+    if (x >= end.x || z >= end.z) {
         return;
     }
 
-    const std::int32_t yEnd = y + static_cast<std::int32_t>(CandidatesPerThreadY) < end.y + 1
+    const std::int32_t yEnd = y + static_cast<std::int32_t>(CandidatesPerThreadY) < end.y
         ? y + static_cast<std::int32_t>(CandidatesPerThreadY)
-        : end.y + 1;
+        : end.y;
 
     const int filterCount = deviceFilterCounts[directionIndex];
 
@@ -238,9 +238,9 @@ bool runCudaScan(
                 item.direction);
         }
 
-        const std::uint32_t xCount = static_cast<std::uint32_t>(item.end.x - item.start.x) + 1U;
-        const std::uint32_t yCount = static_cast<std::uint32_t>(item.end.y - item.start.y) + 1U;
-        const std::uint32_t zCount = static_cast<std::uint32_t>(item.end.z - item.start.z) + 1U;
+        const std::uint32_t xCount = static_cast<std::uint32_t>(item.end.x - item.start.x);
+        const std::uint32_t yCount = static_cast<std::uint32_t>(item.end.y - item.start.y);
+        const std::uint32_t zCount = static_cast<std::uint32_t>(item.end.z - item.start.z);
         if (xCount == 0 || yCount == 0 || zCount == 0) {
             if (error) {
                 *error = "a CUDA tile spans the full 32-bit coordinate range; reduce cudaTileSize or the coordinate range";

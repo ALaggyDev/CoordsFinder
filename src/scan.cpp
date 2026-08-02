@@ -27,8 +27,7 @@ Int2 rotateXzOffset(int x, int z, int direction)
 
 std::uint64_t span(int start, int end)
 {
-    // Widen before subtraction so the full inclusive int32 range is representable.
-    return static_cast<std::uint64_t>(static_cast<std::int64_t>(end) - start) + 1;
+    return static_cast<std::uint64_t>(static_cast<std::int64_t>(end) - start);
 }
 
 std::uint64_t saturatedMultiply(std::uint64_t lhs, std::uint64_t rhs, bool* saturated)
@@ -145,17 +144,17 @@ bool makeScanPlan(
         return false;
     }
 
-    // Tiles are anchored at the minimum bounds; edge tiles are clipped inclusively.
+    // Tiles are anchored at the minimum bounds; edge tiles retain exclusive ends.
     auto addTile = [&](std::uint64_t tileIndexX, std::uint64_t tileIndexZ, std::size_t directionIndex) {
         const std::int64_t xStart = static_cast<std::int64_t>(config.xRange.start)
             + static_cast<std::int64_t>(tileIndexX * tileX);
         const std::int64_t zStart = static_cast<std::int64_t>(config.zRange.start)
             + static_cast<std::int64_t>(tileIndexZ * tileZ);
         const std::int64_t xEnd = std::min<std::int64_t>(
-            xStart + tileSize.x - 1,
+            xStart + tileSize.x,
             config.xRange.end);
         const std::int64_t zEnd = std::min<std::int64_t>(
-            zStart + tileSize.z - 1,
+            zStart + tileSize.z,
             config.zRange.end);
 
         WorkItem item = {

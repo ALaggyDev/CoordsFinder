@@ -352,11 +352,11 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
         return false;
     }
 
-    if (config.xRange.start > config.xRange.end
-        || config.yRange.start > config.yRange.end
-        || config.zRange.start > config.zRange.end) {
+    if (config.xRange.start >= config.xRange.end
+        || config.yRange.start >= config.yRange.end
+        || config.zRange.start >= config.zRange.end) {
         if (error) {
-            *error = "scan range starts must be less than or equal to their ends";
+            *error = "scan range starts must be less than their ends";
         }
         return false;
     }

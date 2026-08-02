@@ -43,13 +43,13 @@ void scanWorkItem(
     std::vector<Match>* matches,
     const std::function<void()>& flush)
 {
-    for (std::int32_t x = item.start.x; x <= item.end.x; ++x) {
-        for (std::int32_t z = item.start.z; z <= item.end.z; ++z) {
+    for (std::int32_t x = item.start.x; x < item.end.x; ++x) {
+        for (std::int32_t z = item.start.z; z < item.end.z; ++z) {
             if (state->cancelRequested.load(std::memory_order_relaxed)) {
                 return;
             }
 
-            for (std::int32_t y = item.start.y; y <= item.end.y; ++y) {
+            for (std::int32_t y = item.start.y; y < item.end.y; ++y) {
                 const int mismatches = countMismatches<Mode>(
                     x,
                     y,

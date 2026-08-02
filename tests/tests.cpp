@@ -26,9 +26,9 @@ ScanConfig baseConfig()
     ScanConfig config;
     config.algorithm = TextureAlgorithm::Vanilla3;
     config.directions = { 0 };
-    config.xRange = { -2, 2 };
-    config.yRange = { 0, 0 };
-    config.zRange = { -2, 2 };
+    config.xRange = { -2, 3 };
+    config.yRange = { 0, 1 };
+    config.zRange = { -2, 3 };
     config.cpuTileSize = { 1, 1 };
     config.cudaTileSize = { 1, 1 };
     config.errorTolerance = 0;
@@ -106,6 +106,8 @@ void testConfigParsing()
     expect(modern.scanOrder == ScanOrder::Spiral, "load spiral scan order");
     expect(!loadScanConfig((root + "/tests/invalid_duplicate.conf").c_str(), &modern, &error), "reject duplicate settings");
     expect(error.find("duplicate setting") != std::string::npos, "report duplicate setting clearly");
+    expect(!loadScanConfig((root + "/tests/invalid_empty_range.conf").c_str(), &modern, &error), "reject empty scan ranges");
+    expect(error.find("starts must be less than their ends") != std::string::npos, "report empty scan ranges clearly");
 }
 
 void testScanOrders()
@@ -135,8 +137,8 @@ void testScanOrders()
 
     config.directions = { 0 };
     config.scanOrder = ScanOrder::Spiral;
-    config.xRange = { 0, 9 };
-    config.zRange = { -1, 0 };
+    config.xRange = { 0, 10 };
+    config.zRange = { -1, 1 };
     config.cpuTileSize = { 3, 1 };
     ScanPlan rectangle;
     expect(makeScanPlan(config, config.cpuTileSize, &rectangle, &error), "build non-square spiral plan");
@@ -150,9 +152,9 @@ void testScanOrders()
 void testCpuScan()
 {
     ScanConfig config = baseConfig();
-    config.xRange = { 17, 17 };
-    config.yRange = { -4, -4 };
-    config.zRange = { -31, -31 };
+    config.xRange = { 17, 18 };
+    config.yRange = { -4, -3 };
+    config.zRange = { -31, -30 };
     config.filter[0].rotation = getTexture(config.algorithm, 17, -4, -31, 4);
 
     ScanPlan plan;
@@ -186,8 +188,8 @@ void testCpuScan()
         &error), "run multithreaded CPU scan");
     std::set<std::tuple<int, int, int>> expected;
     std::set<std::tuple<int, int, int>> actual;
-    for (int z = config.zRange.start; z <= config.zRange.end; ++z) {
-        for (int x = config.xRange.start; x <= config.xRange.end; ++x) {
+    for (int z = config.zRange.start; z < config.zRange.end; ++z) {
+        for (int x = config.xRange.start; x < config.xRange.end; ++x) {
             if (getTexture(config.algorithm, x, 0, z, 4) == 0) {
                 expected.emplace(x, 0, z);
             }

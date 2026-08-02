@@ -65,7 +65,7 @@ scanOrder = linear
 scanOrder = spiral
 ```
 
-Scan ranges are inclusive and use `(start, end)` pairs:
+Scan ranges use `(start, end)` pairs with an exclusive end:
 
 ```ini
 xRange = (-5000, 5000)
