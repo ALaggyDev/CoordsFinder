@@ -16,31 +16,31 @@ The repository includes two presets. Configure once, then build whenever the sou
 
 ### CPU-only
 
-```powershell
+```sh
 cmake --preset cpu-release
 cmake --build --preset cpu-release
-ctest --preset cpu-release
+# ctest --preset cpu-release
 ```
 
 ### CPU + CUDA
 
-```powershell
+```sh
 cmake --preset cuda-release
 cmake --build --preset cuda-release
-ctest --preset cuda-release
+# ctest --preset cuda-release
 ```
 
-On Windows, the executable is under `build/<preset>/Release/coordsfinder.exe`. On single-config Linux generators, it is normally under `build/<preset>/coordsfinder`.
+On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On single-config Linux generators, it is normally under `build/<preset>/coordsfinder`.
 
 ## Run
 
 Run with automatic backend selection:
 
-```powershell
-.\build\cuda-release\Release\coordsfinder.exe .\coordsfinder.example.conf
+```sh
+<coordsfinder_exe> ./coordsfinder.example.conf
 ```
 
-Useful options:
+CLI options:
 
 ```text
 --backend auto|cpu|cuda  Select the execution backend

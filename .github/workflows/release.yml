@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-cpu
+            os: windows-latest
+            preset: cpu-release
+            cuda: false
+          - target: windows-cuda
+            os: windows-latest
+            preset: cuda-release
+            cuda: true
+          - target: linux-cpu
+            os: ubuntu-latest
+            preset: cpu-release
+            cuda: false
+          - target: linux-cuda
+            os: ubuntu-latest
+            preset: cuda-release
+            cuda: true
+    runs-on: ${{ matrix.os }}
+    env:
+      CUDA_ARCHITECTURES: 75-real;86-real;89-real;120-real;120-virtual
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA toolkit
+        if: matrix.cuda
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: "13.2.0"
+          method: network
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [[ "${{ matrix.cuda }}" == "true" ]]; then
+            cmake --preset "${{ matrix.preset }}" -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES"
+          else
+            cmake --preset "${{ matrix.preset }}"
+          fi
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Test CPU build
+        if: ${{ !matrix.cuda }}
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Install
+        run: cmake --install build/${{ matrix.preset }} --prefix dist
+
+      - name: Name release asset
+        shell: bash
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            extension=".exe"
+          fi
+          mv "dist/bin/coordsfinder$extension" "coordsfinder-${{ matrix.target }}$extension"
+
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: coordsfinder-${{ matrix.target }}
+          path: coordsfinder-${{ matrix.target }}*
+          if-no-files-found: error
+
+  publish:
+    name: publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: release-assets/*
