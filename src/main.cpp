@@ -38,11 +38,11 @@ void printUsage(const char* program)
         "CoordsFinder %s\n"
         "Usage: %s [options] <config-file>\n\n"
         "Options:\n"
-        "  --backend auto|cpu|cuda  Select the execution backend (default: auto)\n"
-        "  --threads N              CPU worker count (default: hardware threads)\n"
-        "  --validate               Validate and summarize without scanning\n"
-        "  --help                   Show this help\n"
-        "  --version                Show the version\n",
+        "  -b, --backend auto|cpu|cuda  Select the execution backend (default: auto)\n"
+        "  -t, --threads N              CPU worker count (default: hardware threads)\n"
+        "  -e, --validate               Validate and summarize without scanning\n"
+        "  -h, --help                   Show this help\n"
+        "  -v, --version                Show the version\n",
         COORDSFINDER_VERSION,
         program);
 }
@@ -109,20 +109,21 @@ int main(int argc, char** argv)
             printUsage(argv[0]);
             return 0;
         }
-        if (std::strcmp(argument, "--version") == 0) {
+        if (std::strcmp(argument, "-v") == 0 || std::strcmp(argument, "--version") == 0) {
             std::printf("CoordsFinder %s\n", COORDSFINDER_VERSION);
             return 0;
         }
-        if (std::strcmp(argument, "--validate") == 0) {
+        if (std::strcmp(argument, "-e") == 0 || std::strcmp(argument, "--validate") == 0) {
             validateOnly = true;
             continue;
         }
-        if (std::strcmp(argument, "--backend") == 0 || std::strcmp(argument, "--threads") == 0) {
+        if (std::strcmp(argument, "-b") == 0 || std::strcmp(argument, "--backend") == 0
+            || std::strcmp(argument, "-t") == 0 || std::strcmp(argument, "--threads") == 0) {
             if (++i >= argc) {
                 std::fprintf(stderr, "Missing value for %s.\n", argument);
                 return 1;
             }
-            if (std::strcmp(argument, "--backend") == 0) {
+            if (std::strcmp(argument, "-b") == 0 || std::strcmp(argument, "--backend") == 0) {
                 if (!parseBackend(argv[i], &requestedBackend)) {
                     std::fprintf(stderr, "Invalid backend '%s'.\n", argv[i]);
                     return 1;

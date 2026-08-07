@@ -43,10 +43,11 @@ Run with automatic backend selection:
 CLI options:
 
 ```text
---backend auto|cpu|cuda  Select the execution backend
---threads N              Set CPU worker count
---validate               Validate and summarize without scanning
---help                   Show all options
+-b, --backend auto|cpu|cuda  Select the execution backend
+-t, --threads N              Set CPU worker count
+-e, --validate               Validate and summarize without scanning
+-h, --help                   Show all options
+-v, --version                Show the version
 ```
 
 `auto` selects CUDA when it was compiled in and a CUDA device is available; otherwise it selects CPU.
