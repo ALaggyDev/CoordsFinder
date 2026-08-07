@@ -25,11 +25,11 @@ jobs:
             preset: cuda-release
             cuda: true
           - target: linux-cpu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             preset: cpu-release
             cuda: false
           - target: linux-cuda
-            os: ubuntu-latest
+            os: ubuntu-22.04
             preset: cuda-release
             cuda: true
     runs-on: ${{ matrix.os }}
@@ -37,13 +37,13 @@ jobs:
       CUDA_ARCHITECTURES: 75-real;86-real;89-real;120-real;120-virtual
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install CUDA toolkit
         if: matrix.cuda
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: "13.2.0"
+          cuda: "12.8.0"
           method: network
 
       - name: Configure
@@ -75,7 +75,7 @@ jobs:
           mv "dist/bin/coordsfinder$extension" "coordsfinder-${{ matrix.target }}$extension"
 
       - name: Upload release asset
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coordsfinder-${{ matrix.target }}
           path: coordsfinder-${{ matrix.target }}*
@@ -88,13 +88,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: release-assets
           merge-multiple: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: release-assets/*

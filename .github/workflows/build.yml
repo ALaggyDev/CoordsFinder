@@ -6,9 +6,9 @@ on:
 
 jobs:
   cpu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Configure
         run: cmake --preset cpu-release
       - name: Build
