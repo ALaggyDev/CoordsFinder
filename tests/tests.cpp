@@ -133,7 +133,7 @@ void testScanOrders()
     ScanPlan linear;
     expect(makeScanPlan(config, config.cpuTileSize, &linear, &error), "build linear plan");
     expect(linear.items[0].start.x == -2 && linear.items[0].start.z == -2, "linear starts at minimum bounds");
-    expect(linear.items[24].direction == 0 && linear.items[25].direction == 90, "linear preserves direction-major order");
+    expect(linear.items[0].direction == 0 && linear.items[1].direction == 90, "linear is tile-major across directions");
 
     config.directions = { 0 };
     config.scanOrder = ScanOrder::Spiral;

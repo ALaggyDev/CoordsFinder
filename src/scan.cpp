@@ -174,10 +174,10 @@ bool makeScanPlan(
     };
 
     if (config.scanOrder == ScanOrder::Linear) {
-        // Direction -> X -> Z ordering.
-        for (std::size_t direction = 0; direction < config.directions.size(); ++direction) {
-            for (std::uint64_t x = 0; x < xTiles; ++x) {
-                for (std::uint64_t z = 0; z < zTiles; ++z) {
+        // X -> Z -> Direction ordering.
+        for (std::uint64_t x = 0; x < xTiles; ++x) {
+            for (std::uint64_t z = 0; z < zTiles; ++z) {
+                for (std::size_t direction = 0; direction < config.directions.size(); ++direction) {
                     addTile(x, z, direction);
                 }
             }
