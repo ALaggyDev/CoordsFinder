@@ -1,20 +1,36 @@
 # CoordsFinder
 
-Cross-platform brute-force scanner for matching Minecraft block-model texture variants at candidate coordinates.
+CoordsFinder is the fastest Minecraft texture rotation cracker for cracking coordinates from a screenshot!
 
-CoordsFinder supports a multithreaded CPU backend and a CUDA backend. CUDA is an optional backend for NVIDIA GPUs; a CPU-only build does not need the CUDA Toolkit.
+CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
 
-## Build with CMake
+Check out [my video](TODO) for info :)
+
+## Usage
+
+### Google Colab
+
+You can run CoordsFinder directly on Google Colab with [this notebook](TODO), without needing to install anything! (Nvidia Tesla T4 GPU is available for free!)
+
+### Pre-built binaries
+
+Pre-built CPU and CUDA binaries are available for Windows and Linux. Download the latest release from the [releases page](https://github.com/ALaggyDev/CoordsFinder/releases/latest).
+
+Pre-built binaries have the following minimum versions:
+
+-   Minimum CUDA version: 12.8
+-   Minimum GPU compute capability: Turing (GTX 16, RTX 20 series)
+-   Glibc: 2.35 (Linux)
+
+### Build with CMake
 
 Requirements:
 
-- CMake 3.24 or newer
-- A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
-- Optional: NVIDIA CUDA Toolkit for the CUDA backend
+-   CMake 3.24 or newer
+-   A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
+-   Optional: NVIDIA CUDA Toolkit for the CUDA backend
 
-The repository includes two presets. Configure once, then build whenever the source changes.
-
-### CPU-only
+CPU-only:
 
 ```sh
 cmake --preset cpu-release
@@ -22,7 +38,7 @@ cmake --build --preset cpu-release
 # ctest --preset cpu-release
 ```
 
-### CPU + CUDA
+CPU + CUDA:
 
 ```sh
 cmake --preset cuda-release
@@ -30,14 +46,14 @@ cmake --build --preset cuda-release
 # ctest --preset cuda-release
 ```
 
-On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On single-config Linux generators, it is normally under `build/<preset>/coordsfinder`.
+On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On Linux, it is under `build/<preset>/coordsfinder`.
 
 ## Run
 
-Run with automatic backend selection:
+To run CoordsFinder, provide a search config file as the first argument:
 
 ```sh
-<coordsfinder_exe> ./coordsfinder.example.conf
+<coordsfinder_exe> ./example.conf
 ```
 
 CLI options:
@@ -50,67 +66,96 @@ CLI options:
 -v, --version                Show the version
 ```
 
-`auto` selects CUDA when it was compiled in and a CUDA device is available; otherwise it selects CPU.
+The `auto` backend selects CUDA when it was compiled in and a CUDA device is available; otherwise it selects CPU.
 
-## Scan order
+## Search config
 
-`linear` preserves the original direction-major, minimum-X then minimum-Z ordering:
-
-```ini
-scanOrder = linear
-```
-
-`spiral` begins at the X/Z tile containing the center of the bounds and scans rectangular rings outwards. It checks every selected direction for a tile before moving farther from the center:
+An example search config is included in [example.conf](./example.conf). It is a simple INI-like file with the following sections:
 
 ```ini
-scanOrder = spiral
-```
+# Comment starts with a hash. (#)
 
-Scan ranges use `(start, end)` pairs with an exclusive end:
+algorithm = Vanilla-3             # Vanilla-1, Vanilla-2, Vanilla-3, Sodium-1, Sodium-2
+scanOrder = spiral                # linear, spiral
+directions = [0]                  # 0, 90, 180, 270
 
-```ini
 xRange = (-5000, 5000)
 yRange = (-60, 0)
 zRange = (-5000, 5000)
+
+errorTolerance = 0                # Maximum number of texture rotation errors accepted
+
+cpuTileSize = (1024, 1024)
+cudaTileSize = (16384, 16384)
+verbose = false
+
+[filter]
+# x y z | variant [side]
+-6 0 0 | 3
+-5 0 0 | 3
+-6 0 -1 | 0 side
+-5 0 -1 | 1 side
 ```
 
-CPU and CUDA use independent tile sizes. CPU tiles are dynamically claimed worker
-tasks, while each CUDA tile is one kernel launch and result-buffer drain:
+More examples can be found in the [example](./examples) folder.
+
+### Algorithm
+
+Select the texture algorithm in the config. If unsure, use `Vanilla-3` as a safe default.
+
+| Minecraft version | Algorithm   |
+| ----------------- | ----------- |
+| <= 1.12.2         | `Vanilla-1` |
+| 1.13-1.21.1       | `Vanilla-2` |
+| 1.21.2+           | `Vanilla-3` |
+
+| Sodium version | Minecraft version | Algorithm              |
+| -------------- | ----------------- | ---------------------- |
+| 1.0-4.1        | 1.16-1.18.2       | `Sodium-1`             |
+| 4.2-4.8        | 1.19-1.19.3       | `Sodium-2`             |
+| 4.9+           | 1.19.3+           | Use the Minecraft mode |
+
+### Scan order
+
+Scan order determines the order in which tiles are scanned.
+- `linear` starts from the minimum X/Z corner to the maximum X/Z corner.
+- `spiral` begins at the center and scans in a clockwise spiral pattern.
+
+### Directions
+
+`directions` are **very important** if the cardinal direction of the screenshot is unknown. `directions` tells CoordsFinder if it should rotates the filter offsets and variants.
+
+```ini
+directions = [0, 90, 180, 270]
+```
+
+For example, if `directions = [0, 180]`, CoordsFinder will both scan the filter as-is and *also* scan the filter rotated 180 degrees horizontally.
+
+If the screenshot direction is unknown, it is recommended to use `directions = [0, 90, 180, 270]` or `directions = [0, 180]`.
+
+### Scan ranges
+
+Self-explanatory. Range ends are exclusive.
+
+### Error tolerance
+
+Error tolerance dictates the maximum number of non-matching texture rotations allowed per candidate.
+
+Note that error tolerance **severely impacts** performance. It is not recommended to use an error tolerance above 3.
+
+### Tile sizes & verbosity (advanced)
+
+The default settings for tile sizes and verbosity are reasonable and do not need to be changed typically.
 
 ```ini
 cpuTileSize = (1024, 1024)
 cudaTileSize = (16384, 16384)
-
-# Accept up to this many non-matching filter rows at a candidate.
-errorTolerance = 0
-
-# Log each work item as it starts, in addition to normal periodic progress.
 verbose = false
 ```
 
-Large CUDA tiles reduce launch overhead but increase cancellation latency and may
-overflow the 65,536-match per-tile result buffer when the filter is loose. Reduce
-`cudaTileSize` if that occurs.
+Tile size determines the area scanned per work item. Verbose mode prints out the output for each work item.
 
-## Algorithms
-
-Select the texture algorithm in the config:
-
-```ini
-algorithm = Vanilla-3
-```
-
-| Minecraft version | Algorithm |
-| --- | --- |
-| <= 1.12.2 | `Vanilla-1` |
-| 1.13-1.21.1 | `Vanilla-2` |
-| 1.21.2+ | `Vanilla-3` |
-
-| Sodium version | Minecraft version | Algorithm |
-| --- | --- | --- |
-| 1.0-4.1 | 1.16-1.18.2 | `Sodium-1` |
-| 4.2-4.8 | 1.19-1.19.3 | `Sodium-2` |
-| 4.9+ | 1.19.3+ | Use the Minecraft mode |
+### Filters
 
 Filter rows use one of these forms:
 
@@ -119,12 +164,64 @@ x y z | variant
 x y z | variant side
 ```
 
-Normal checks compare the selected four-state model variant directly. Side checks sample the four model variants, then fold them to two visible-side states.
+The first 3 numbers are the relative block coordinates to an origin. The fourth number is the texture variant. The optional `side` keyword indicates that the filter is a side face.
 
-`directions` selects possible horizontal compass rotations:
+## Speed
 
-```ini
-directions = [0, 90, 180, 270]
-```
+Benchmark setup:
+- Search area: -225000 to 225000 in X/Z, -60 to 0 in Y (Donut SMP area)
+- CPU: AMD Ryzen AI 9 365 (10 cores, 20 threads)
+- GPU: NVIDIA RTX 5080 Laptop
+- OS: Windows 11, on MSVC
+- Error tolerance: 0
 
-For each direction, X/Z filter offsets are rotated clockwise on a top-down Minecraft map. Top and bottom variants advance by one state per quarter-turn; side variants remain unchanged.
+|                     | CPU (1 thread)  | CPU (20 threads) | GPU (CUDA)      |
+| ------------------- | --------------- | ---------------- | --------------- |
+| Peak position/sec   | 168M            | 1,860M           | **103,000M!**      |
+| Estimated time      | 20 hours 5 mins | 1 hours 48 mins  | **2 mins 5 secs!** |
+
+## FAQs
+
+### Which blocks have texture rotations?
+
+Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. Note that I may have missed some blocks, and I haven't tested all of them.
+- Grass block
+- Rooted Dirt
+- Dirt
+- Dirt path
+- Stone & Infested stone, with side face variants
+- Deepslate & Infested deepslate, with side face variants
+- Bedrock, with side face variants
+- Sculk, with side face variants
+- Podzol
+- Mycelium
+- Sand
+- Red sand
+- All 16 colors of concrete powder
+- Lily pad
+- Sea pickle?
+- Turtle egg?
+- Netherrack (NOTE: not supported yet, since it has 16 variants)
+
+Flower random offsets are not part of the texture rotation algorithm (block variant model) but are instead hard-coded into the game. I will be looking into it in the future.
+
+### What is the difference between WebCoordsFinder and CoordsFinder?
+
+WebCoordsFinder is a web-based app. It allows users to upload a screenshot, draw the grid, mark the texture rotations, and either perform the scan on the app or download a config file to use in CoordsFinder. It is a convenient way to generate a config file without having to painstakingly mark and write it by hand.
+
+CoordsFinder is a command-line tool that performs the actual bruteforce search. It supports CUDA and is much faster than the built-in WebCoordsFinder scanner.
+
+In short: Start with WebCoordsFinder, and either use the built-in scanner or use CoordsFinder.
+
+### How is CoordsFinder so fast?
+
+It is fast because:
+- It is written in C++, which is a compiled language.
+- It uses GPU acceleration to massively parallelize the search.
+- Careful optimizations such as reducing warp divergence and using constant memory are made to the CUDA backend.
+
+In the future, I may look into alternative searching algorithms such as the [Boyer-Moore algorithm](https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm) to further improve performance. Optimization improvements and suggestions are very much appreciated!
+
+## Contributing
+
+Contributions are welcome! Feel free to open an issue or submit a pull request!
