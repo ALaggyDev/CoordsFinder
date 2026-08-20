@@ -184,7 +184,7 @@ Benchmark setup:
 
 ### Which blocks have texture rotations?
 
-Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. Note that I may have missed some blocks, and I haven't tested all of them.
+Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. Note that I may have missed some blocks, and not all of them have been tested.
 - Grass block
 - Rooted Dirt
 - Dirt
@@ -205,6 +205,12 @@ Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. 
 
 Flower random offsets are not part of the texture rotation algorithm (block variant model) but are instead hard-coded into the game. I will be looking into it in the future.
 
+### How does texture rotation cracking even work?
+
+I will spare my words here and instead link to these amazing resources that explain the concept in detail:
+- [Texture Rotation Reverser Java](https://github.com/19MisterX98/TextureRotations) by 19MisterX98
+- [Texture Exploit Guide](https://gitea.com/ChromeCrusher/Texploit-Guide) by ChromeCrusher
+
 ### What is the difference between WebCoordsFinder and CoordsFinder?
 
 WebCoordsFinder is a web-based app. It allows users to upload a screenshot, draw the grid, mark the texture rotations, and either perform the scan on the app or download a config file to use in CoordsFinder. It is a convenient way to generate a config file without having to painstakingly mark and write it by hand.
@@ -212,6 +218,10 @@ WebCoordsFinder is a web-based app. It allows users to upload a screenshot, draw
 CoordsFinder is a command-line tool that performs the actual bruteforce search. It supports CUDA and is much faster than the built-in WebCoordsFinder scanner.
 
 In short: Start with WebCoordsFinder, and either use the built-in scanner or use CoordsFinder.
+
+### I don't have a Nvidia GPU but I want to scan faster! What should I do?
+
+Use the free Google Colab notebook in [here](TODO)!
 
 ### How is CoordsFinder so fast?
 
@@ -221,6 +231,12 @@ It is fast because:
 - Careful optimizations such as reducing warp divergence and using constant memory are made to the CUDA backend.
 
 In the future, I may look into alternative searching algorithms such as the [Boyer-Moore algorithm](https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm) to further improve performance. Optimization improvements and suggestions are very much appreciated!
+
+### Why is texture rotation cracking relatively unknown to the Minecraft community?
+
+Honestly I have no idea. Texture rotation cracking is certainly not a new concept, and there's a lot of information about it online (The earliest reference I can find was from 2019 by [hacker mann](https://www.youtube.com/watch?v=6__hO4cc1pA)!). However, most of the information just didn't reach the general Minecraft community somehow. Instead, bedrock cracking and "cloud cracking" have taken the spotlight instead of texture rotation cracking, which is a shame.
+
+Now, WebCoordsFinder basically perfected texture rotation cracking and made it accessible to everyone. I hope that this project will help spread awareness of texture rotation cracking and its immense power!
 
 ## Contributing
 
