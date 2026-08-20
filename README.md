@@ -6,6 +6,8 @@ CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
 
 Check out [my video](TODO) for info :)
 
+If you want to include CoordsFinder in your own video/project, please credit me and my project as a gesture of kindness. Thank you!
+
 ## Usage
 
 ### Google Colab
