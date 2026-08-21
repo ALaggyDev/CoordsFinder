@@ -4,7 +4,14 @@ CoordsFinder is the fastest Minecraft texture rotation cracker for cracking coor
 
 CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
 
-Check out [my video](TODO) for info :)
+Check out my video on YouTube!
+
+Links:
+- [Youtube Video](https://www.youtube.com/watch?v=xgd15Bl2v9o)
+- [WebCoordsFinder](https://github.com/ALaggyDev/WebCoordsFinder)
+- [Colab Notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing)
+
+If you like this project, please star it on Github and share it with your friends!
 
 If you want to include CoordsFinder in your own video/project, please credit me and my project as a gesture of kindness. Thank you!
 

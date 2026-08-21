@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(CoordsFinder VERSION 0.2.0 LANGUAGES CXX)
+project(CoordsFinder VERSION 1.0.0 LANGUAGES CXX)
 
 # Keep CUDA opt-in: configuring the default build must not require a CUDA toolkit.
 option(COORDSFINDER_ENABLE_CUDA "Build the optional CUDA backend" OFF)
