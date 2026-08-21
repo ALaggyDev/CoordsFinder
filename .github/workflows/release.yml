@@ -17,11 +17,11 @@ jobs:
       matrix:
         include:
           - target: windows-cpu
-            os: windows-latest
+            os: windows-2022
             preset: cpu-release
             cuda: false
           - target: windows-cuda
-            os: windows-latest
+            os: windows-2022
             preset: cuda-release
             cuda: true
           - target: linux-cpu
