@@ -7,7 +7,7 @@ CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
 Check out my video on YouTube!
 
 Links:
-- [Youtube Video](https://www.youtube.com/watch?v=xgd15Bl2v9o)
+- [Youtube Video](https://www.youtube.com/watch?v=gXTN9DD_Cp0)
 - [WebCoordsFinder](https://github.com/ALaggyDev/WebCoordsFinder)
 - [Colab Notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing)
 
