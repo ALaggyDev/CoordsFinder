@@ -58,7 +58,7 @@ void testDirectionalFilter()
     expect(ordered[2].x == 1 && ordered[3].x == 3, "filter ordering remains stable within rejection groups");
 }
 
-void testTextureGoldenVectors()
+void testTextureAlgorithms()
 {
     struct Vector {
         int x;
@@ -66,13 +66,28 @@ void testTextureGoldenVectors()
         int z;
         std::uint8_t expected[5];
     };
+    // Vanilla1 | Vanilla2 | Vanilla3 | Sodium1 | Sodium2. Each algorithm uses 4 variants.
     const Vector vectors[] = {
-        { 0, 0, 0, { 0, 3, 2, 3, 2 } },
-        { 1, 2, 3, { 0, 1, 3, 2, 0 } },
-        { -1, -2, -3, { 3, 0, 0, 1, 0 } },
-        { 2147483647, 0, std::numeric_limits<int>::min(), { 0, 3, 3, 3, 1 } },
-        { 353, -60, -53, { 2, 1, 0, 1, 3 } },
-        { std::numeric_limits<int>::min(), 2147483647, 17, { 3, 0, 2, 3, 1 } },
+        { 0, 0, 0, { 0, 0, 2, 3, 2 } },
+        { 1, 2, 3, { 0, 2, 3, 2, 0 } },
+        { -1, -2, -3, { 3, 3, 0, 1, 0 } },
+        { 353, -60, -53, { 2, 2, 0, 1, 3 } },
+        { -29999984, -64, 29999983, { 1, 2, 1, 3, 0 } },
+        { 29999999, 319, -29999999, { 3, 3, 2, 3, 3 } },
+        { -538, 67, -575, { 3, 3, 1, 0, 2 } },
+        { 17, -4, -31, { 3, 0, 3, 0, 3 } },
+        { 1000000, 319, -1000000, { 0, 0, 2, 0, 0 } },
+        { -30000000, -64, 30000000, { 0, 2, 0, 0, 2 } },
+        { 1234567, 72, -7654321, { 0, 1, 2, 2, 1 } },
+        { -16777216, 255, 16777215, { 3, 2, 3, 1, 1 } },
+        { 31, 63, 127, { 1, 1, 1, 2, 2 } },
+        { -32, -64, -128, { 1, 2, 0, 0, 0 } },
+        { 4096, 0, 4096, { 3, 0, 3, 2, 3 } },
+        { -4096, 1, -4096, { 1, 1, 0, 2, 1 } },
+        { 7355608, 64, -8355608, { 2, 3, 1, 1, 2 } },
+        { -1200345, 15, 9090909, { 2, 3, 0, 0, 3 } },
+        { 8675309, -59, -3141592, { 0, 0, 1, 1, 2 } },
+        { -2718281, 118, 1618033, { 2, 1, 2, 3, 1 } },
     };
     const TextureAlgorithm modes[] = {
         TextureAlgorithm::Vanilla1,
@@ -86,7 +101,7 @@ void testTextureGoldenVectors()
         for (std::size_t mode = 0; mode < 5; ++mode) {
             expect(
                 getTexture(modes[mode], vector.x, vector.y, vector.z, 4) == vector.expected[mode],
-                "texture sampler matches Java golden vector");
+                "texture sampler matches TextureRotations reference vector");
         }
     }
     expect(wrapAdd(std::numeric_limits<int>::max(), 1) == std::numeric_limits<int>::min(), "coordinate addition wraps at INT_MAX");
@@ -205,7 +220,7 @@ void testCpuScan()
 
 int main()
 {
-    testTextureGoldenVectors();
+    testTextureAlgorithms();
     testDirectionalFilter();
     testConfigParsing();
     testScanOrders();
