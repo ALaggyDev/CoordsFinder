@@ -88,7 +88,7 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t coordinateRandom(std::int32_t x, st
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint32_t randomVanilla2(std::uint64_t seed)
 {
     seed = (seed ^ JavaMultiplier) & JavaMask;
-    return static_cast<std::uint32_t>((seed * 0xBB20B4600A69ULL + 0x40942DE6BULL) >> 16);
+    return static_cast<std::uint32_t>((seed * 0xBB20B4600A69ULL + 0x40942DE6BAULL) >> 16);
 }
 
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint32_t legacyNextBits(std::uint64_t& seed, int bits)
