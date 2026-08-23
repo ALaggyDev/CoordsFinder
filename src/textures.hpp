@@ -41,12 +41,9 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t signExtend32(std::uint32_t bits)
         static_cast<std::int64_t>(static_cast<std::int32_t>(bits)));
 }
 
-CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t absoluteModulo(std::int32_t value, std::uint8_t mod)
+CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t modulo4(std::int32_t value)
 {
-    // Widen before negating so INT32_MIN remains representable.
-    const std::uint32_t magnitude = static_cast<std::uint32_t>(
-        value < 0 ? -static_cast<std::int64_t>(value) : value);
-    return static_cast<std::uint8_t>(magnitude % mod);
+    return static_cast<std::uint8_t>(static_cast<std::uint32_t>(value) & 3U);
 }
 
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t rotateLeft64(std::uint64_t bits, int distance)
@@ -150,19 +147,19 @@ struct TextureSampler;
 
 template <>
 struct TextureSampler<TextureAlgorithm::Vanilla1> {
-    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
+    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t)
     {
-        return texture_detail::absoluteModulo(
-            static_cast<std::int32_t>(texture_detail::coordinateRandomLegacy(x, y, z)), variants);
+        return texture_detail::modulo4(
+            static_cast<std::int32_t>(texture_detail::coordinateRandomLegacy(x, y, z)));
     }
 };
 
 template <>
 struct TextureSampler<TextureAlgorithm::Vanilla2> {
-    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
+    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t)
     {
-        return texture_detail::absoluteModulo(
-            static_cast<std::int32_t>(texture_detail::randomVanilla2(texture_detail::coordinateRandom(x, y, z))), variants);
+        return texture_detail::modulo4(
+            static_cast<std::int32_t>(texture_detail::randomVanilla2(texture_detail::coordinateRandom(x, y, z))));
     }
 };
 
@@ -176,19 +173,19 @@ struct TextureSampler<TextureAlgorithm::Vanilla3> {
 
 template <>
 struct TextureSampler<TextureAlgorithm::Sodium1> {
-    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
+    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t)
     {
-        return texture_detail::absoluteModulo(
-            static_cast<std::int32_t>(texture_detail::randomSodium1(texture_detail::coordinateRandom(x, y, z))), variants);
+        return texture_detail::modulo4(
+            static_cast<std::int32_t>(texture_detail::randomSodium1(texture_detail::coordinateRandom(x, y, z))));
     }
 };
 
 template <>
 struct TextureSampler<TextureAlgorithm::Sodium2> {
-    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
+    CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t)
     {
-        return texture_detail::absoluteModulo(
-            static_cast<std::int32_t>(texture_detail::randomSodium2(texture_detail::coordinateRandom(x, y, z))), variants);
+        return texture_detail::modulo4(
+            static_cast<std::int32_t>(texture_detail::randomSodium2(texture_detail::coordinateRandom(x, y, z))));
     }
 };
 
