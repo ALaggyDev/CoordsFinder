@@ -355,6 +355,16 @@ bool runCudaScan(
                 item.end.z,
                 item.direction);
         }
+        // Drain the tile that previously occupied this buffer before reusing it:
+        // submitting first would overwrite its device buffer, staged count, and
+        // completion event before its results were ever downloaded.
+        if (submitted >= PipelineDepth) {
+            if (!drainTile(submitted - PipelineDepth)) {
+                fatal = true;
+                break;
+            }
+            ++drained;
+        }
         const int submitResult = submitTile(submitted);
         if (submitResult == SubmitInvalidTile) {
             // The rejected tile never reached the GPU; everything already submitted
@@ -365,13 +375,6 @@ bool runCudaScan(
         if (submitResult != SubmitOk) {
             fatal = true;
             break;
-        }
-        if (submitted >= PipelineDepth) {
-            if (!drainTile(submitted - PipelineDepth)) {
-                fatal = true;
-                break;
-            }
-            ++drained;
         }
     }
     if (!fatal) {
