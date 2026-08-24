@@ -40,8 +40,9 @@
         "COORDSFINDER_ENABLE_HIP": "ON",
         "CMAKE_HIP_ARCHITECTURES": "gfx1200", //CHANGE THIS DEPENDING ON UR GPU,
         // SEE https://rocmdocs.amd.com/en/develop/reference/gpu-specs.html AND LOOK FOR LLVM TARGET NAME FOR YOUR GPU
-        "CMAKE_HIP_COMPILER": "E:/ROCm/bin/clang-cl.exe",
-        "CMAKE_CXX_COMPILER": "E:/ROCm/bin/clang-cl.exe"
+        "CMAKE_HIP_COMPILER": "C:/ROCm/bin/clang-cl.exe", //CHANGE THIS DEPENDING ON WHERE UR ROCM INSTALL IS
+        "CMAKE_CXX_COMPILER": "C:/ROCm/bin/clang-cl.exe" //CHANGE THIS DEPENDING ON WHERE UR ROCM INSTALL IS
+        // THIS WONT WORK IF YOU DONT HAVE ROCM INSTALLED, SO MAKE SURE TO INSTALL IT FIRST, also idk how to make it work on linux, but it should be similar to this, just change the paths to where ur rocm install is
       }
     }
   ],
