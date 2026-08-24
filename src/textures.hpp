@@ -136,6 +136,12 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint32_t randomSodium2(std::uint64_t seed)
     high = staffordMix13(high);
     return static_cast<std::uint32_t>(rotateLeft64(low + high, 17) + low);
 }
+
+CF_HOST_DEVICE CF_FORCE_INLINE std::uint64_t coordinateBaseRaw(std::int32_t x, std::int32_t z)
+{
+    const std::uint32_t xProduct = static_cast<std::uint32_t>(x) * 3129871U;
+    return signExtend32(xProduct) ^ (signExtend32(static_cast<std::uint32_t>(z)) * 116129781ULL);
+}
 }
 
 CF_HOST_DEVICE CF_FORCE_INLINE std::int32_t wrapAdd(std::int32_t value, std::int8_t offset)
@@ -191,6 +197,40 @@ struct TextureSampler<TextureAlgorithm::Sodium2> {
             static_cast<std::int32_t>(texture_detail::randomSodium2(texture_detail::coordinateRandom(x, y, z))), variants);
     }
 };
+
+template <TextureAlgorithm Mode>
+CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t getTextureFromBaseAndY(
+    std::uint64_t base,
+    std::int32_t y,
+    std::int8_t dy,
+    std::uint8_t variants)
+{
+    std::uint64_t rawSeed = base ^ texture_detail::signExtend32(static_cast<std::uint32_t>(wrapAdd(y, dy)));
+    rawSeed = rawSeed * rawSeed * 42317861ULL + rawSeed * 11ULL;
+
+    if constexpr (Mode == TextureAlgorithm::Vanilla1) {
+        std::uint32_t legacySeed = static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(rawSeed) >> 16);
+        return texture_detail::absoluteModulo(static_cast<std::int32_t>(legacySeed), variants);
+    }
+    else {
+        std::uint64_t seed = static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(rawSeed) >> 16);
+        if constexpr (Mode == TextureAlgorithm::Vanilla2) {
+            return texture_detail::absoluteModulo(static_cast<std::int32_t>(texture_detail::randomVanilla2(seed)), variants);
+        }
+        else if constexpr (Mode == TextureAlgorithm::Vanilla3) {
+            return texture_detail::legacyNextInt(seed, variants);
+        }
+        else if constexpr (Mode == TextureAlgorithm::Sodium1) {
+            return texture_detail::absoluteModulo(static_cast<std::int32_t>(texture_detail::randomSodium1(seed)), variants);
+        }
+        else if constexpr (Mode == TextureAlgorithm::Sodium2) {
+            return texture_detail::absoluteModulo(static_cast<std::int32_t>(texture_detail::randomSodium2(seed)), variants);
+        }
+    }
+    return 0;
+}
 
 template <TextureAlgorithm Mode>
 CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t getTextureForMode(

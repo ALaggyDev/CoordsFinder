@@ -11,30 +11,6 @@ namespace {
 constexpr std::size_t ResultBatchSize = 256;
 
 template <TextureAlgorithm Mode>
-int countMismatches(
-    std::int32_t x,
-    std::int32_t y,
-    std::int32_t z,
-    const RotationInfo* filter,
-    std::size_t filterCount,
-    int errorTolerance)
-{
-    int mismatches = 0;
-    for (std::size_t i = 0; i < filterCount; ++i) {
-        const RotationInfo& info = filter[i];
-        const std::uint8_t variant = getTextureForMode<Mode>(
-            wrapAdd(x, info.x),
-            wrapAdd(y, info.y),
-            wrapAdd(z, info.z),
-            4);
-        if ((variant & info.visibleMask) != info.rotation && ++mismatches > errorTolerance) {
-            break;
-        }
-    }
-    return mismatches;
-}
-
-template <TextureAlgorithm Mode>
 void scanWorkItem(
     const ScanConfig& config,
     const WorkItem& item,
@@ -43,29 +19,42 @@ void scanWorkItem(
     std::vector<Match>* matches,
     const std::function<void()>& flush)
 {
+    const std::size_t filterCount = filter.size();
+    const RotationInfo* filterData = filter.data();
+    const int errorTolerance = config.errorTolerance;
+
     for (std::int32_t x = item.start.x; x < item.end.x; ++x) {
         for (std::int32_t z = item.start.z; z < item.end.z; ++z) {
             if (state->cancelRequested.load(std::memory_order_relaxed)) {
                 return;
             }
 
-            for (std::int32_t y = item.start.y; y < item.end.y; ++y) {
-                const int mismatches = countMismatches<Mode>(
-                    x,
-                    y,
-                    z,
-                    filter.data(),
-                    filter.size(),
-                    config.errorTolerance);
+            std::uint64_t bases[MaxFilterCount];
+            for (std::size_t i = 0; i < filterCount; ++i) {
+                bases[i] = texture_detail::coordinateBaseRaw(
+                    wrapAdd(x, filterData[i].x),
+                    wrapAdd(z, filterData[i].z)
+                );
+            }
 
-                if (mismatches <= config.errorTolerance) {
-                    matches->push_back({
-                        x,
+            for (std::int32_t y = item.start.y; y < item.end.y; ++y) {
+                int mismatches = 0;
+                
+                for (std::size_t i = 0; i < filterCount; ++i) {
+                    const RotationInfo& info = filterData[i];
+                    const std::uint8_t variant = getTextureFromBaseAndY<Mode>(
+                        bases[i],
                         y,
-                        z,
-                        mismatches,
-                        item.direction,
-                    });
+                        info.y,
+                        4);
+
+                    if ((variant & info.visibleMask) != info.rotation && ++mismatches > errorTolerance) {
+                        break;
+                    }
+                }
+
+                if (mismatches <= errorTolerance) {
+                    matches->push_back({ x, y, z, mismatches, item.direction });
                     if (matches->size() == ResultBatchSize) {
                         flush();
                     }
