@@ -1,4 +1,5 @@
 build/
-
+.vs
+build_vs/
 searches/
 outputs/

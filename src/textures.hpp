@@ -4,7 +4,7 @@
 
 #include "types.hpp"
 
-#if defined(__CUDACC__)
+#if defined(__CUDACC__) || defined(__HIPCC__)
 #define CF_HOST_DEVICE __host__ __device__
 #define CF_FORCE_INLINE __forceinline__
 #elif defined(_MSC_VER)

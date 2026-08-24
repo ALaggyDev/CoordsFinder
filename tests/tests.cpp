@@ -116,6 +116,7 @@ void testConfigParsing()
     expect(loadScanConfig((root + "/tests/modern.conf").c_str(), &modern, &error), "load backend-specific tile config");
     expect(modern.cpuTileSize.x == 7 && modern.cpuTileSize.z == 9, "load CPU tile sizes");
     expect(modern.cudaTileSize.x == 70 && modern.cudaTileSize.z == 90, "load CUDA tile sizes");
+    expect(modern.hipTileSize.x == 70 && modern.hipTileSize.z == 90, "load HIP tile sizes");
     expect(modern.errorTolerance == 2, "load error tolerance");
     expect(!modern.verbose, "load verbose setting");
     expect(modern.scanOrder == ScanOrder::Spiral, "load spiral scan order");

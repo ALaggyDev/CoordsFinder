@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,17 @@ constexpr unsigned int ResultCapacity = 65536;
 __device__ __constant__ RotationInfo deviceFilters[MaxDirectionCount][MaxFilterCount];
 __device__ __constant__ int deviceFilterCounts[MaxDirectionCount];
 
+// __shared__ variables must be trivially default-constructible; RotationInfo's
+// default member initializers disqualify it, so stage through this layout-identical POD.
+struct SharedRotationInfo {
+    std::int8_t x;
+    std::int8_t y;
+    std::int8_t z;
+    std::uint8_t rotation;
+    std::uint8_t visibleMask;
+};
+static_assert(sizeof(SharedRotationInfo) == sizeof(RotationInfo), "shared staging layout mismatch");
+
 template <TextureAlgorithm Mode>
 __global__ void bruteForceKernel(
     Int3 start,
@@ -34,6 +46,19 @@ __global__ void bruteForceKernel(
 {
     // Tiles are limited to 32-bit spans.
     // A thread owns a short vertical column of at most CandidatesPerThreadY blocks.
+    __shared__ SharedRotationInfo sharedFilters[MaxFilterCount];
+    const unsigned int threadCount = blockDim.x * blockDim.z;
+    const unsigned int lane = threadIdx.x + threadIdx.z * blockDim.x;
+
+    const int filterCount = deviceFilterCounts[directionIndex];
+    // Stage the direction filter in shared memory: warp divergence on filterIndex
+    // would otherwise serialize every __constant__ broadcast fetch.
+    for (unsigned int i = lane; i < static_cast<unsigned int>(filterCount); i += threadCount) {
+        const RotationInfo& src = deviceFilters[directionIndex][i];
+        sharedFilters[i] = { src.x, src.y, src.z, src.rotation, src.visibleMask };
+    }
+    __syncthreads();
+
     const std::uint32_t xOffset = blockIdx.x * blockDim.x + threadIdx.x;
     const std::uint32_t yBaseOffset = blockIdx.y * CandidatesPerThreadY;
     const std::uint32_t zOffset = blockIdx.z * blockDim.z + threadIdx.z;
@@ -50,12 +75,10 @@ __global__ void bruteForceKernel(
         ? y + static_cast<std::int32_t>(CandidatesPerThreadY)
         : end.y;
 
-    const int filterCount = deviceFilterCounts[directionIndex];
-
     int filterIndex = 0;
     int mismatches = 0;
     while (y < yEnd) {
-        const RotationInfo& info = deviceFilters[directionIndex][filterIndex];
+        const SharedRotationInfo& info = sharedFilters[filterIndex];
         const std::uint8_t variant = getTextureForMode<Mode>(
             wrapAdd(x, info.x),
             wrapAdd(y, info.y),
@@ -68,20 +91,19 @@ __global__ void bruteForceKernel(
 
         ++filterIndex;
 
-        if (mismatches > errorTolerance) {
-            ++y;
-            filterIndex = 0;
-            mismatches = 0;
-        }
-
-        if (filterIndex == filterCount) {
-            // Never silently lose matches: record capacity overflow for the host to report.
-            const unsigned int index = atomicAdd(resultCount, 1U);
-            if (index < ResultCapacity) {
-                results[index] = { x, y, z, mismatches, direction };
-            }
-            else {
-                atomicExch(resultOverflow, 1);
+        // Single advance point: rejection wins ties against completion, exactly
+        // matching the previous two-check sequencing.
+        const bool rejected = mismatches > errorTolerance;
+        if (rejected || filterIndex == filterCount) {
+            if (!rejected) {
+                // Never silently lose matches: record capacity overflow for the host to report.
+                const unsigned int index = atomicAdd(resultCount, 1U);
+                if (index < ResultCapacity) {
+                    results[index] = { x, y, z, mismatches, direction };
+                }
+                else {
+                    atomicExch(resultOverflow, 1);
+                }
             }
             ++y;
             filterIndex = 0;
@@ -197,46 +219,66 @@ bool runCudaScan(
         return false;
     }
 
-    Match* deviceResults = nullptr;
-    unsigned int* deviceResultCount = nullptr;
-    int* deviceResultOverflow = nullptr;
-    if (!check(cudaMalloc(&deviceResults, sizeof(Match) * ResultCapacity), "allocate result buffer", error)
-        || !check(cudaMalloc(&deviceResultCount, sizeof(unsigned int)), "allocate result counter", error)
-        || !check(cudaMalloc(&deviceResultOverflow, sizeof(int)), "allocate result overflow flag", error)) {
-        cudaFree(deviceResults);
-        cudaFree(deviceResultCount);
-        cudaFree(deviceResultOverflow);
-        return false;
+    // Double-buffered pipeline: while tile N runs, tile N-1's downloads complete and
+    // its matches drain on the host. Results are still emitted strictly in plan order.
+    constexpr std::size_t PipelineDepth = 2;
+
+    cudaStream_t stream = nullptr;
+    cudaEvent_t completion[PipelineDepth] = {};
+    Match* deviceResults[PipelineDepth] = {};
+    unsigned int* deviceResultCount[PipelineDepth] = {};
+    int* deviceResultOverflow[PipelineDepth] = {};
+    Match* stagedResults[PipelineDepth] = {};
+    auto stagedCounts = std::unique_ptr<unsigned int[]>(new unsigned int[PipelineDepth]());
+    auto stagedOverflows = std::unique_ptr<int[]>(new int[PipelineDepth]());
+
+    bool allocationFailed = false;
+    if (!check(cudaStreamCreate(&stream), "create CUDA stream", error)) {
+        allocationFailed = true;
+    }
+    for (std::size_t i = 0; i < PipelineDepth && !allocationFailed; ++i) {
+        if (!check(cudaEventCreateWithFlags(&completion[i], cudaEventDisableTiming), "create CUDA event", error)
+            || !check(cudaMalloc(&deviceResults[i], sizeof(Match) * ResultCapacity), "allocate result buffer", error)
+            || !check(cudaMalloc(&deviceResultCount[i], sizeof(unsigned int)), "allocate result counter", error)
+            || !check(cudaMalloc(&deviceResultOverflow[i], sizeof(int)), "allocate result overflow flag", error)
+            || !check(cudaMallocHost(&stagedResults[i], sizeof(Match) * ResultCapacity), "allocate pinned result staging", error)) {
+            allocationFailed = true;
+        }
     }
 
-    std::vector<Match> results(ResultCapacity);
     cudaDeviceProp properties = {};
     int device = 0;
-    if (!check(cudaGetDevice(&device), "get CUDA device", error)
-        || !check(cudaGetDeviceProperties(&properties, device), "get CUDA device properties", error)) {
-        cudaFree(deviceResults);
-        cudaFree(deviceResultCount);
-        cudaFree(deviceResultOverflow);
-        return false;
+    if (!allocationFailed
+        && (!check(cudaGetDevice(&device), "get CUDA device", error)
+            || !check(cudaGetDeviceProperties(&properties, device), "get CUDA device properties", error))) {
+        allocationFailed = true;
     }
-    std::fprintf(stderr, "CUDA device: %s.\n", properties.name);
 
-    bool succeeded = true;
-    for (const WorkItem& item : plan.items) {
-        if (state->cancelRequested.load(std::memory_order_relaxed)) {
-            break;
+    if (!allocationFailed) {
+        std::fprintf(stderr, "CUDA device: %s.\n", properties.name);
+        // Record each event once so early synchronizations always observe a real signal.
+        for (std::size_t i = 0; i < PipelineDepth; ++i) {
+            cudaEventRecord(completion[i], stream);
         }
-        if (config.verbose) {
-            std::fprintf(stderr,
-                "Scanning tile (%d, %d, %d) to (%d, %d, %d), direction %d.\n",
-                item.start.x,
-                item.start.y,
-                item.start.z,
-                item.end.x,
-                item.end.y,
-                item.end.z,
-                item.direction);
-        }
+    }
+
+    bool succeeded = !allocationFailed;
+    bool fatal = allocationFailed;
+    bool invalidTile = false;
+    std::size_t submitted = 0;
+    std::size_t drained = 0;
+    std::vector<Match> results;
+    results.reserve(ResultCapacity);
+
+    // Submissions and drains run PipelineDepth-1 tiles apart; each buffer is only
+    // reused after its previous drain synchronized past the result download.
+    constexpr int SubmitOk = 0;
+    constexpr int SubmitInvalidTile = 1;
+    constexpr int SubmitRuntimeFailure = 2;
+    auto submitTile = [&](std::size_t index) -> int {
+
+        const WorkItem& item = plan.items[index];
+        const std::size_t b = index % PipelineDepth;
 
         const std::uint32_t xCount = static_cast<std::uint32_t>(item.end.x - item.start.x);
         const std::uint32_t yCount = static_cast<std::uint32_t>(item.end.y - item.start.y);
@@ -245,8 +287,7 @@ bool runCudaScan(
             if (error) {
                 *error = "a CUDA tile spans the full 32-bit coordinate range; reduce cudaTileSize or the coordinate range";
             }
-            succeeded = false;
-            break;
+            return SubmitInvalidTile;
         }
         const dim3 block(ThreadsX, 1, ThreadsZ);
         const dim3 grid(
@@ -259,48 +300,101 @@ bool runCudaScan(
             if (error) {
                 *error = "tile dimensions exceed this CUDA device's grid limits; reduce cudaTileSize";
             }
-            succeeded = false;
-            break;
+            return SubmitInvalidTile;
         }
 
-        // One bounded buffer is reused and drained after each synchronized tile.
-        if (!check(cudaMemset(deviceResultCount, 0, sizeof(unsigned int)), "reset result counter", error)
-            || !check(cudaMemset(deviceResultOverflow, 0, sizeof(int)), "reset result overflow flag", error)
-            || !check(launch(config.algorithm, item, config.errorTolerance, grid, block, deviceResults, deviceResultCount, deviceResultOverflow), "launch CUDA scan", error)
-            || !check(cudaDeviceSynchronize(), "run CUDA scan", error)) {
-            succeeded = false;
-            break;
-        }
+        const bool enqueued = check(cudaMemsetAsync(deviceResultCount[b], 0, sizeof(unsigned int), stream), "reset result counter", error)
+            && check(cudaMemsetAsync(deviceResultOverflow[b], 0, sizeof(int), stream), "reset result overflow flag", error)
+            && check(launch(config.algorithm, item, config.errorTolerance, grid, block, deviceResults[b], deviceResultCount[b], deviceResultOverflow[b]), "launch CUDA scan", error)
+            && check(cudaMemcpyAsync(&stagedCounts[b], deviceResultCount[b], sizeof(unsigned int), cudaMemcpyDeviceToHost, stream), "read result count", error)
+            && check(cudaMemcpyAsync(&stagedOverflows[b], deviceResultOverflow[b], sizeof(int), cudaMemcpyDeviceToHost, stream), "read result overflow flag", error)
+            && check(cudaEventRecord(completion[b], stream), "record CUDA tile event", error);
+        return enqueued ? SubmitOk : SubmitRuntimeFailure;
+    };
 
-        unsigned int resultCount = 0;
-        int resultOverflow = 0;
-        if (!check(cudaMemcpy(&resultCount, deviceResultCount, sizeof(resultCount), cudaMemcpyDeviceToHost), "read result count", error)
-            || !check(cudaMemcpy(&resultOverflow, deviceResultOverflow, sizeof(resultOverflow), cudaMemcpyDeviceToHost), "read result overflow flag", error)) {
-            succeeded = false;
-            break;
+    auto drainTile = [&](std::size_t index) -> bool {
+        const std::size_t b = index % PipelineDepth;
+        if (!check(cudaEventSynchronize(completion[b]), "await CUDA tile", error)) {
+            return false;
         }
-        if (resultOverflow) {
+        if (stagedOverflows[b]) {
             if (error) {
                 *error = "a tile produced more than 65536 matches; reduce cudaTileSize or tighten the filter";
             }
-            succeeded = false;
-            break;
+            return false;
         }
+        const unsigned int resultCount = stagedCounts[b];
         if (resultCount > 0) {
-            results.resize(resultCount);
-            if (!check(cudaMemcpy(results.data(), deviceResults, sizeof(Match) * resultCount, cudaMemcpyDeviceToHost), "download results", error)) {
-                succeeded = false;
-                break;
+            if (!check(cudaMemcpyAsync(stagedResults[b], deviceResults[b], sizeof(Match) * resultCount, cudaMemcpyDeviceToHost, stream), "download results", error)
+                || !check(cudaEventRecord(completion[b], stream), "record CUDA download event", error)
+                || !check(cudaEventSynchronize(completion[b]), "finish CUDA download", error)) {
+                return false;
             }
+            results.assign(stagedResults[b], stagedResults[b] + resultCount);
             sink(results);
             state->matches.fetch_add(resultCount, std::memory_order_relaxed);
         }
-        state->candidates.fetch_add(workItemCandidateCount(item), std::memory_order_relaxed);
+        state->candidates.fetch_add(workItemCandidateCount(plan.items[index]), std::memory_order_relaxed);
         state->completedItems.fetch_add(1, std::memory_order_relaxed);
-    }
+        return true;
+    };
 
-    cudaFree(deviceResults);
-    cudaFree(deviceResultCount);
-    cudaFree(deviceResultOverflow);
+    for (; submitted < plan.items.size() && !fatal; ++submitted) {
+        if (state->cancelRequested.load(std::memory_order_relaxed)) {
+            break;
+        }
+        if (config.verbose) {
+            const WorkItem& item = plan.items[submitted];
+            std::fprintf(stderr,
+                "Scanning tile (%d, %d, %d) to (%d, %d, %d), direction %d.\n",
+                item.start.x,
+                item.start.y,
+                item.start.z,
+                item.end.x,
+                item.end.y,
+                item.end.z,
+                item.direction);
+        }
+        const int submitResult = submitTile(submitted);
+        if (submitResult == SubmitInvalidTile) {
+            // The rejected tile never reached the GPU; everything already submitted
+            // stays valid and is flushed below before reporting the failure.
+            invalidTile = true;
+            break;
+        }
+        if (submitResult != SubmitOk) {
+            fatal = true;
+            break;
+        }
+        if (submitted >= PipelineDepth) {
+            if (!drainTile(submitted - PipelineDepth)) {
+                fatal = true;
+                break;
+            }
+            ++drained;
+        }
+    }
+    if (!fatal) {
+        // Flush every tile that reached the GPU, including after cancellation or a
+        // later invalid tile: their results are exact and dropping them would
+        // silently lose work.
+        while (drained < submitted && drainTile(drained)) {
+            ++drained;
+        }
+        if (drained < submitted) {
+            fatal = true;
+        }
+    }
+    succeeded = !fatal && !invalidTile;
+
+    cudaStreamSynchronize(stream);
+    for (std::size_t i = 0; i < PipelineDepth; ++i) {
+        cudaEventDestroy(completion[i]);
+        cudaFree(deviceResults[i]);
+        cudaFree(deviceResultCount[i]);
+        cudaFree(deviceResultOverflow[i]);
+        cudaFreeHost(stagedResults[i]);
+    }
+    cudaStreamDestroy(stream);
     return succeeded;
 }

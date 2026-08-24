@@ -316,6 +316,9 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
         flags->errorTolerance = parseInt(value, &config->errorTolerance);
         return flags->errorTolerance;
     }
+    if (name == "hiptilesize") {
+        return parseTileSize(value, &config->hipTileSize);
+    }
     if (name == "verbose") {
         return parseBool(value, &config->verbose);
     }
@@ -371,6 +374,13 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
     if (config.cudaTileSize.x <= 0 || config.cudaTileSize.z <= 0) {
         if (error) {
             *error = "cudaTileSize dimensions must be positive";
+        }
+        return false;
+    }
+
+    if (config.hipTileSize.x <= 0 || config.hipTileSize.z <= 0) {
+        if (error) {
+            *error = "hipTileSize dimensions must be positive";
         }
         return false;
     }

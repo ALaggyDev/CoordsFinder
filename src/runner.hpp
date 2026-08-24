@@ -37,3 +37,14 @@ bool runCudaScan(
     const MatchSink& sink,
     std::string* error);
 #endif
+
+#if defined(COORDSFINDER_HAS_HIP)
+bool hipAvailable(std::string* reason);
+
+bool runHipScan(
+    const ScanConfig& config,
+    const ScanPlan& plan,
+    ScanState* state,
+    const MatchSink& sink,
+    std::string* error);
+#endif
