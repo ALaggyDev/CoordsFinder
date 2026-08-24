@@ -2,11 +2,12 @@
 
 CoordsFinder is the fastest Minecraft texture rotation cracker for cracking coordinates from a screenshot!
 
-CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
+CoordsFinder supports a multithreaded CPU backend, a CUDA backend for NVIDIA GPUs, and a HIP backend for AMD GPUs.
 
 Check out my video on YouTube!
 
 Links:
+
 - [Youtube Video](https://www.youtube.com/watch?v=gXTN9DD_Cp0)
 - [WebCoordsFinder](https://github.com/ALaggyDev/WebCoordsFinder)
 - [Colab Notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing)
@@ -27,17 +28,18 @@ Pre-built CPU and CUDA binaries are available for Windows and Linux. Download th
 
 Pre-built binaries have the following minimum versions:
 
--   Minimum CUDA version: 12.8
--   Minimum GPU compute capability: Turing (GTX 16, RTX 20 series)
--   Glibc: 2.35 (Linux)
+- Minimum CUDA version: 12.8
+- Minimum GPU compute capability: Turing (GTX 16, RTX 20 series)
+- Glibc: 2.35 (Linux)
 
 ### Build with CMake
 
 Requirements:
 
--   CMake 3.24 or newer
--   A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
--   Optional: NVIDIA CUDA Toolkit for the CUDA backend
+- CMake 3.24 or newer
+- A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
+- Optional: NVIDIA CUDA Toolkit for the CUDA backend
+- Optional: AMD ROCm for the HIP backend
 
 CPU-only:
 
@@ -55,6 +57,16 @@ cmake --build --preset cuda-release
 # ctest --preset cuda-release
 ```
 
+CPU + HIP (AMD):
+
+```sh
+cmake --preset hip-release
+cmake --build --preset hip-release
+# ctest --preset hip-release
+```
+
+Note: The HIP preset requires ROCm to be installed. You may need to adjust the `CMAKE_HIP_ARCHITECTURES`, `CMAKE_HIP_COMPILER`, and `CMAKE_CXX_COMPILER` settings in `CMakePresets.json` based on your ROCm installation path and GPU architecture. See the [AMD GPU specifications](https://rocmdocs.amd.com/en/develop/reference/gpu-specs.html) for the correct LLVM target name for your GPU.
+
 On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On Linux, it is under `build/<preset>/coordsfinder`.
 
 ## Run
@@ -68,14 +80,14 @@ To run CoordsFinder, provide a search config file as the first argument:
 CLI options:
 
 ```text
--b, --backend auto|cpu|cuda  Select the execution backend
--t, --threads N              Set CPU worker count
--e, --validate               Validate and summarize without scanning
--h, --help                   Show all options
--v, --version                Show the version
+-b, --backend auto|cpu|cuda|hip  Select the execution backend
+-t, --threads N                  Set CPU worker count
+-e, --validate                   Validate and summarize without scanning
+-h, --help                       Show all options
+-v, --version                    Show the version
 ```
 
-The `auto` backend selects CUDA when it was compiled in and a CUDA device is available; otherwise it selects CPU.
+The `auto` backend selects CUDA when it was compiled in and a CUDA device is available; otherwise it tries HIP if available; otherwise it selects CPU.
 
 ## Search config
 
@@ -127,6 +139,7 @@ Select the texture algorithm in the config. If unsure, use `Vanilla-3` as a safe
 ### Scan order
 
 Scan order determines the order in which tiles are scanned.
+
 - `linear` starts from the minimum X/Z corner to the maximum X/Z corner.
 - `spiral` begins at the center and scans in a clockwise spiral pattern.
 
@@ -138,7 +151,7 @@ Scan order determines the order in which tiles are scanned.
 directions = [0, 90, 180, 270]
 ```
 
-For example, if `directions = [0, 180]`, CoordsFinder will both scan the filter as-is and *also* scan the filter rotated 180 degrees horizontally.
+For example, if `directions = [0, 180]`, CoordsFinder will both scan the filter as-is and _also_ scan the filter rotated 180 degrees horizontally.
 
 If the screenshot direction is unknown, it is recommended to use `directions = [0, 90, 180, 270]` or `directions = [0, 180]`.
 
@@ -178,22 +191,24 @@ The first 3 numbers are the relative block coordinates to an origin. The fourth 
 ## Speed
 
 Benchmark setup:
+
 - Search area: -225000 to 225000 in X/Z, -60 to 0 in Y (Donut SMP area)
 - CPU: AMD Ryzen AI 9 365 (10 cores, 20 threads)
 - GPU: NVIDIA RTX 5080 Laptop
 - OS: Windows 11, on MSVC
 - Error tolerance: 0
 
-|                     | CPU (1 thread)  | CPU (20 threads) | GPU (CUDA)      |
-| ------------------- | --------------- | ---------------- | --------------- |
-| Peak position/sec   | 168M            | 1,860M           | **103,000M!**      |
-| Estimated time      | 20 hours 5 mins | 1 hours 48 mins  | **2 mins 5 secs!** |
+|                   | CPU (1 thread)  | CPU (20 threads) | GPU (CUDA)         |
+| ----------------- | --------------- | ---------------- | ------------------ |
+| Peak position/sec | 168M            | 1,860M           | **103,000M!**      |
+| Estimated time    | 20 hours 5 mins | 1 hours 48 mins  | **2 mins 5 secs!** |
 
 ## FAQs
 
 ### Which blocks have texture rotations?
 
 Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. Note that I may have missed some blocks, and not all of them have been tested.
+
 - Grass block
 - Rooted Dirt
 - Dirt
@@ -217,6 +232,7 @@ Flower random offsets are not part of the texture rotation algorithm (block vari
 ### How does texture rotation cracking even work?
 
 I will spare my words here and instead link to these amazing resources that explain the concept in detail:
+
 - [Texture Rotation Reverser Java](https://github.com/19MisterX98/TextureRotations) by 19MisterX98
 - [Texture Exploit Guide](https://gitea.com/ChromeCrusher/Texploit-Guide) by ChromeCrusher
 
@@ -235,6 +251,7 @@ Use the free Google Colab notebook in [here](TODO)!
 ### How is CoordsFinder so fast?
 
 It is fast because:
+
 - It is written in C++, which is a compiled language.
 - It uses GPU acceleration to massively parallelize the search.
 - Careful optimizations such as reducing warp divergence and using constant memory are made to the CUDA backend.
