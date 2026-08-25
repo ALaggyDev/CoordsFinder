@@ -7,6 +7,10 @@
 #if defined(__CUDACC__)
 #define CF_HOST_DEVICE __host__ __device__
 #define CF_FORCE_INLINE __forceinline__
+#elif defined(__HIP__)
+// hipcc (clang-based) never defines __CUDACC__, so HIP needs its own branch.
+#define CF_HOST_DEVICE __host__ __device__
+#define CF_FORCE_INLINE inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
 #define CF_HOST_DEVICE
 #define CF_FORCE_INLINE __forceinline
@@ -103,6 +107,8 @@ CF_HOST_DEVICE CF_FORCE_INLINE std::uint8_t legacyNextInt(std::uint64_t seed, st
     const std::uint32_t intBound = bound;
 
     if ((intBound & (0U - intBound)) == intBound) {
+        // Power-of-two bound: the multiply-high form is exact, and for the
+        // hot variants==4 call site the shift count folds to a constant.
         return static_cast<std::uint8_t>((static_cast<std::uint64_t>(intBound) * legacyNextBits(seed, 31)) >> 31);
     }
 
@@ -152,6 +158,9 @@ template <>
 struct TextureSampler<TextureAlgorithm::Vanilla1> {
     CF_HOST_DEVICE CF_FORCE_INLINE static std::uint8_t sample(std::int32_t x, std::int32_t y, std::int32_t z, std::uint8_t variants)
     {
+        // Note Vanilla-1 deliberately narrows to int32 BEFORE shifting (legacy
+        // behaviour: only seed bits 16..31 reach the modulo), while every later
+        // algorithm arithmetic-shifts the full 64-bit value.
         return texture_detail::absoluteModulo(
             static_cast<std::int32_t>(texture_detail::coordinateRandomLegacy(x, y, z)), variants);
     }

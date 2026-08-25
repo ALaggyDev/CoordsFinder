@@ -108,6 +108,7 @@ void testTextureAlgorithms()
     expect(wrapAdd(std::numeric_limits<int>::min(), -1) == std::numeric_limits<int>::max(), "coordinate addition wraps at INT_MIN");
 }
 
+
 void testConfigParsing()
 {
     ScanConfig modern;

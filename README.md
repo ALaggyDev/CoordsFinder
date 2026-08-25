@@ -38,6 +38,7 @@ Requirements:
 -   CMake 3.24 or newer
 -   A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
 -   Optional: NVIDIA CUDA Toolkit for the CUDA backend
+-   Optional: AMD ROCm (HIP) for the AMD backend
 
 CPU-only:
 
@@ -55,6 +56,16 @@ cmake --build --preset cuda-release
 # ctest --preset cuda-release
 ```
 
+CPU + HIP (AMD ROCm):
+
+```sh
+cmake --preset hip-release
+cmake --build --preset hip-release
+# ctest --preset hip-release
+```
+
+Requires the ROCm HIP SDK (e.g. `rocm-hip-sdk`). The build targets most modern RDNA3/RDNA4 GPUs by default; pass `-DCMAKE_HIP_ARCHITECTURES=gfxXXXX` for other cards (e.g. `gfx1030` for the RX 6000 series). Select the backend with `-b hip`.
+
 On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On Linux, it is under `build/<preset>/coordsfinder`.
 
 ## Run
@@ -68,14 +79,14 @@ To run CoordsFinder, provide a search config file as the first argument:
 CLI options:
 
 ```text
--b, --backend auto|cpu|cuda  Select the execution backend
+-b, --backend auto|cpu|cuda|hip  Select the execution backend
 -t, --threads N              Set CPU worker count
 -e, --validate               Validate and summarize without scanning
 -h, --help                   Show all options
 -v, --version                Show the version
 ```
 
-The `auto` backend selects CUDA when it was compiled in and a CUDA device is available; otherwise it selects CPU.
+The `auto` backend selects CUDA when it was compiled in and a CUDA device is available, then HIP, then falls back to CPU.
 
 ## Search config
 
@@ -189,6 +200,20 @@ Benchmark setup:
 | Peak position/sec   | 168M            | 1,860M           | **103,000M!**      |
 | Estimated time      | 20 hours 5 mins | 1 hours 48 mins  | **2 mins 5 secs!** |
 
+### Staged-kernel update
+
+The GPU backends were rewritten to eliminate warp divergence (see the FAQ below).
+Measured on an RTX 3070 (Linux, GCC) with the same search area and `errorTolerance = 0`:
+
+|                        | GPU (CUDA), old kernel | GPU (CUDA), staged kernel |
+| ---------------------- | ---------------------- | ------------------------- |
+| Peak position/sec      | 48,000M                | **110,000M!**             |
+
+That is ~2.3x on identical hardware, growing to ~3.2x at `errorTolerance = 3`
+(6,700M -> 21,300M). Real-world scans can see up to ~2.5x. Notably, the staged
+kernel on an RTX 3070 outperforms the old kernel's RTX 5080 Laptop result above.
+AMD (HIP) figures not yet measured.
+
 ## FAQs
 
 ### Which blocks have texture rotations?
@@ -237,9 +262,9 @@ Use the free Google Colab notebook in [here](TODO)!
 It is fast because:
 - It is written in C++, which is a compiled language.
 - It uses GPU acceleration to massively parallelize the search.
-- Careful optimizations such as reducing warp divergence and using constant memory are made to the CUDA backend.
+- Careful optimizations such as reducing warp divergence and using constant memory are made to the GPU backends.
 
-In the future, I may look into alternative searching algorithms such as the [Boyer-Moore algorithm](https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm) to further improve performance. Optimization improvements and suggestions are very much appreciated!
+In the future, I may look into further micro-architectural tuning of the GPU backends. Optimization improvements and suggestions are very much appreciated!
 
 ### Why is texture rotation cracking relatively unknown to the Minecraft community?
 

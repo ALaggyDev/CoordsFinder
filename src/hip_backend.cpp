@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#define COORDSFINDER_GPU_CUDA
+#define COORDSFINDER_GPU_HIP
 #include "gpu_kernels.cuh"
 
 namespace {
@@ -16,45 +16,52 @@ using coordsfinder_gpu::ResultCapacity;
 using coordsfinder_gpu::ThreadsX;
 using coordsfinder_gpu::ThreadsZ;
 
-const char* cudaMessage(cudaError_t error)
+const char* hipMessage(hipError_t error)
 {
-    return cudaGetErrorString(error);
+    return hipGetErrorString(error);
 }
 
-bool check(cudaError_t result, const char* operation, std::string* error)
+// HIP marks cleanup/error-drain calls [[nodiscard]]; failures during teardown
+// have no meaningful handler, so discard explicitly.
+inline void hipDiscard(hipError_t result)
 {
-    if (result == cudaSuccess) {
+    (void)result;
+}
+
+bool check(hipError_t result, const char* operation, std::string* error)
+{
+    if (result == hipSuccess) {
         return true;
     }
     if (error) {
-        *error = std::string(operation) + ": " + cudaMessage(result);
+        *error = std::string(operation) + ": " + hipMessage(result);
     }
     return false;
 }
 
 }
 
-bool cudaAvailable(std::string* reason)
+bool hipAvailable(std::string* reason)
 {
     int deviceCount = 0;
-    const cudaError_t result = cudaGetDeviceCount(&deviceCount);
-    if (result != cudaSuccess) {
+    const hipError_t result = hipGetDeviceCount(&deviceCount);
+    if (result != hipSuccess) {
         if (reason) {
-            *reason = cudaMessage(result);
+            *reason = hipMessage(result);
         }
-        cudaGetLastError();
+        hipDiscard(hipGetLastError());
         return false;
     }
     if (deviceCount == 0) {
         if (reason) {
-            *reason = "no CUDA device was found";
+            *reason = "no HIP device was found";
         }
         return false;
     }
     return true;
 }
 
-bool runCudaScan(
+bool runHipScan(
     const ScanConfig& config,
     const ScanPlan& plan,
     ScanState* state,
@@ -72,34 +79,35 @@ bool runCudaScan(
     }
 
     // Upload every direction once; spiral order can then switch directions per tile cheaply.
-    if (!check(cudaMemcpyToSymbol(coordsfinder_gpu::deviceFilters, filters.data(), sizeof(filters)), "upload filters", error)
-        || !check(cudaMemcpyToSymbol(coordsfinder_gpu::deviceFilterCounts, filterCounts.data(), sizeof(filterCounts)), "upload filter counts", error)) {
+    // HIP_SYMBOL wraps the device symbol as required by the HIP runtime API.
+    if (!check(hipMemcpyToSymbol(HIP_SYMBOL(coordsfinder_gpu::deviceFilters), filters.data(), sizeof(filters)), "upload filters", error)
+        || !check(hipMemcpyToSymbol(HIP_SYMBOL(coordsfinder_gpu::deviceFilterCounts), filterCounts.data(), sizeof(filterCounts)), "upload filter counts", error)) {
         return false;
     }
 
     Match* deviceResults = nullptr;
     unsigned int* deviceResultCount = nullptr;
     int* deviceResultOverflow = nullptr;
-    if (!check(cudaMalloc(&deviceResults, sizeof(Match) * ResultCapacity), "allocate result buffer", error)
-        || !check(cudaMalloc(&deviceResultCount, sizeof(unsigned int)), "allocate result counter", error)
-        || !check(cudaMalloc(&deviceResultOverflow, sizeof(int)), "allocate result overflow flag", error)) {
-        cudaFree(deviceResults);
-        cudaFree(deviceResultCount);
-        cudaFree(deviceResultOverflow);
+    if (!check(hipMalloc(&deviceResults, sizeof(Match) * ResultCapacity), "allocate result buffer", error)
+        || !check(hipMalloc(&deviceResultCount, sizeof(unsigned int)), "allocate result counter", error)
+        || !check(hipMalloc(&deviceResultOverflow, sizeof(int)), "allocate result overflow flag", error)) {
+        hipDiscard(hipFree(deviceResults));
+        hipDiscard(hipFree(deviceResultCount));
+        hipDiscard(hipFree(deviceResultOverflow));
         return false;
     }
 
     std::vector<Match> results(ResultCapacity);
-    cudaDeviceProp properties = {};
+    hipDeviceProp_t properties = {};
     int device = 0;
-    if (!check(cudaGetDevice(&device), "get CUDA device", error)
-        || !check(cudaGetDeviceProperties(&properties, device), "get CUDA device properties", error)) {
-        cudaFree(deviceResults);
-        cudaFree(deviceResultCount);
-        cudaFree(deviceResultOverflow);
+    if (!check(hipGetDevice(&device), "get HIP device", error)
+        || !check(hipGetDeviceProperties(&properties, device), "get HIP device properties", error)) {
+        hipDiscard(hipFree(deviceResults));
+        hipDiscard(hipFree(deviceResultCount));
+        hipDiscard(hipFree(deviceResultOverflow));
         return false;
     }
-    std::fprintf(stderr, "CUDA device: %s.\n", properties.name);
+    std::fprintf(stderr, "HIP device: %s.\n", properties.name);
 
     bool succeeded = true;
     for (const WorkItem& item : plan.items) {
@@ -123,7 +131,7 @@ bool runCudaScan(
         const std::uint32_t zCount = static_cast<std::uint32_t>(item.end.z - item.start.z);
         if (xCount == 0 || yCount == 0 || zCount == 0) {
             if (error) {
-                *error = "a CUDA tile spans the full 32-bit coordinate range; reduce cudaTileSize or the coordinate range";
+                *error = "a HIP tile spans the full 32-bit coordinate range; reduce cudaTileSize or the coordinate range";
             }
             succeeded = false;
             break;
@@ -137,25 +145,25 @@ bool runCudaScan(
             || grid.y > static_cast<unsigned int>(properties.maxGridSize[1])
             || grid.z > static_cast<unsigned int>(properties.maxGridSize[2])) {
             if (error) {
-                *error = "tile dimensions exceed this CUDA device's grid limits; reduce cudaTileSize";
+                *error = "tile dimensions exceed this HIP device's grid limits; reduce cudaTileSize";
             }
             succeeded = false;
             break;
         }
 
         // One bounded buffer is reused and drained after each synchronized tile.
-        if (!check(cudaMemset(deviceResultCount, 0, sizeof(unsigned int)), "reset result counter", error)
-            || !check(cudaMemset(deviceResultOverflow, 0, sizeof(int)), "reset result overflow flag", error)
-            || !check(coordsfinder_gpu::launch(config.algorithm, item, config.errorTolerance, grid, block, deviceResults, deviceResultCount, deviceResultOverflow), "launch CUDA scan", error)
-            || !check(cudaDeviceSynchronize(), "run CUDA scan", error)) {
+        if (!check(hipMemset(deviceResultCount, 0, sizeof(unsigned int)), "reset result counter", error)
+            || !check(hipMemset(deviceResultOverflow, 0, sizeof(int)), "reset result overflow flag", error)
+            || !check(coordsfinder_gpu::launch(config.algorithm, item, config.errorTolerance, grid, block, deviceResults, deviceResultCount, deviceResultOverflow), "launch HIP scan", error)
+            || !check(hipDeviceSynchronize(), "run HIP scan", error)) {
             succeeded = false;
             break;
         }
 
         unsigned int resultCount = 0;
         int resultOverflow = 0;
-        if (!check(cudaMemcpy(&resultCount, deviceResultCount, sizeof(resultCount), cudaMemcpyDeviceToHost), "read result count", error)
-            || !check(cudaMemcpy(&resultOverflow, deviceResultOverflow, sizeof(resultOverflow), cudaMemcpyDeviceToHost), "read result overflow flag", error)) {
+        if (!check(hipMemcpy(&resultCount, deviceResultCount, sizeof(resultCount), hipMemcpyDeviceToHost), "read result count", error)
+            || !check(hipMemcpy(&resultOverflow, deviceResultOverflow, sizeof(resultOverflow), hipMemcpyDeviceToHost), "read result overflow flag", error)) {
             succeeded = false;
             break;
         }
@@ -168,7 +176,7 @@ bool runCudaScan(
         }
         if (resultCount > 0) {
             results.resize(resultCount);
-            if (!check(cudaMemcpy(results.data(), deviceResults, sizeof(Match) * resultCount, cudaMemcpyDeviceToHost), "download results", error)) {
+            if (!check(hipMemcpy(results.data(), deviceResults, sizeof(Match) * resultCount, hipMemcpyDeviceToHost), "download results", error)) {
                 succeeded = false;
                 break;
             }
@@ -179,8 +187,8 @@ bool runCudaScan(
         state->completedItems.fetch_add(1, std::memory_order_relaxed);
     }
 
-    cudaFree(deviceResults);
-    cudaFree(deviceResultCount);
-    cudaFree(deviceResultOverflow);
+    hipDiscard(hipFree(deviceResults));
+    hipDiscard(hipFree(deviceResultCount));
+    hipDiscard(hipFree(deviceResultOverflow));
     return succeeded;
 }

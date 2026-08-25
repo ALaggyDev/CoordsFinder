@@ -24,6 +24,15 @@
         "COORDSFINDER_ENABLE_CUDA": "ON",
         "CMAKE_CUDA_ARCHITECTURES": "native"
       }
+    },
+    {
+      "name": "hip-release",
+      "displayName": "CPU + HIP (AMD ROCm) release",
+      "binaryDir": "${sourceDir}/build/hip-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "COORDSFINDER_ENABLE_HIP": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -35,6 +44,11 @@
     {
       "name": "cuda-release",
       "configurePreset": "cuda-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "hip-release",
+      "configurePreset": "hip-release",
       "configuration": "Release"
     }
   ],
@@ -50,6 +64,14 @@
     {
       "name": "cuda-release",
       "configurePreset": "cuda-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "hip-release",
+      "configurePreset": "hip-release",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true

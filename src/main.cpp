@@ -21,6 +21,7 @@ enum class Backend {
     Auto,
     Cpu,
     Cuda,
+    Hip,
 };
 
 ScanState* activeState = nullptr;
@@ -38,7 +39,7 @@ void printUsage(const char* program)
         "CoordsFinder %s\n"
         "Usage: %s [options] <config-file>\n\n"
         "Options:\n"
-        "  -b, --backend auto|cpu|cuda  Select the execution backend (default: auto)\n"
+        "  -b, --backend auto|cpu|cuda|hip  Select the execution backend (default: auto)\n"
         "  -t, --threads N              CPU worker count (default: hardware threads)\n"
         "  -e, --validate               Validate and summarize without scanning\n"
         "  -h, --help                   Show this help\n"
@@ -59,6 +60,10 @@ bool parseBackend(const char* text, Backend* backend)
     }
     if (std::strcmp(text, "cuda") == 0) {
         *backend = Backend::Cuda;
+        return true;
+    }
+    if (std::strcmp(text, "hip") == 0) {
+        *backend = Backend::Hip;
         return true;
     }
     return false;
@@ -185,33 +190,53 @@ int main(int argc, char** argv)
 #if defined(COORDSFINDER_HAS_CUDA)
     std::string cudaReason;
     const bool hasCuda = cudaAvailable(&cudaReason);
-    // Auto gracefully falls back to CPU when the binary has no usable CUDA device.
+#else
+    std::string cudaReason = "this build has no CUDA support; reconfigure with COORDSFINDER_ENABLE_CUDA=ON";
+    const bool hasCuda = false;
+#endif
+#if defined(COORDSFINDER_HAS_HIP)
+    std::string hipReason;
+    const bool hasHip = hipAvailable(&hipReason);
+#else
+    std::string hipReason = "this build has no HIP support; reconfigure with COORDSFINDER_ENABLE_HIP=ON";
+    const bool hasHip = false;
+#endif
+    // Auto prefers CUDA, then HIP, then falls back to the CPU.
     if (backend == Backend::Auto) {
-        backend = hasCuda ? Backend::Cuda : Backend::Cpu;
+        if (hasCuda) {
+            backend = Backend::Cuda;
+        }
+        else if (hasHip) {
+            backend = Backend::Hip;
+        }
+        else {
+            backend = Backend::Cpu;
+        }
     }
     if (backend == Backend::Cuda && !hasCuda) {
         std::fprintf(stderr, "CUDA is unavailable: %s\n", cudaReason.c_str());
         return 1;
     }
-#else
-    if (backend == Backend::Cuda) {
-        std::fprintf(stderr, "This is a CPU-only build. Reconfigure with COORDSFINDER_ENABLE_CUDA=ON.\n");
+    if (backend == Backend::Hip && !hasHip) {
+        std::fprintf(stderr, "HIP is unavailable: %s\n", hipReason.c_str());
         return 1;
     }
-    backend = Backend::Cpu;
-#endif
 
-    const TileSize tileSize = backend == Backend::Cuda
-        ? config.cudaTileSize
-        : config.cpuTileSize;
+
+    const TileSize tileSize = backend == Backend::Cpu
+        ? config.cpuTileSize
+        : config.cudaTileSize;
     ScanPlan plan;
     if (!makeScanPlan(config, tileSize, &plan, &error)) {
         std::fprintf(stderr, "Scan plan error: %s\n", error.c_str());
         return 1;
     }
-    printPlanSummary(stderr, backend == Backend::Cuda ? "CUDA" : "CPU", plan);
+    const char* backendName = backend == Backend::Cuda
+        ? "CUDA"
+        : backend == Backend::Hip ? "HIP" : "CPU";
+    printPlanSummary(stderr, backendName, plan);
 
-    std::fprintf(stderr, "Backend: %s", backend == Backend::Cuda ? "CUDA" : "CPU");
+    std::fprintf(stderr, "Backend: %s", backendName);
     if (backend == Backend::Cpu) {
         if (threadCount == 0) {
             const unsigned int available = std::thread::hardware_concurrency();
@@ -269,8 +294,13 @@ int main(int argc, char** argv)
         succeeded = runCpuScan(config, plan, threadCount, &state, sink, &error);
     }
 #if defined(COORDSFINDER_HAS_CUDA)
-    else {
+    else if (backend == Backend::Cuda) {
         succeeded = runCudaScan(config, plan, &state, sink, &error);
+    }
+#endif
+#if defined(COORDSFINDER_HAS_HIP)
+    else if (backend == Backend::Hip) {
+        succeeded = runHipScan(config, plan, &state, sink, &error);
     }
 #endif
 
