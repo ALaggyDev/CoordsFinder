@@ -2,7 +2,8 @@
 
 CoordsFinder is the fastest Minecraft texture rotation cracker for cracking coordinates from a screenshot!
 
-CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
+CoordsFinder supports a multithreaded CPU backend, an NVIDIA CUDA backend, and
+an Apple Metal backend for Apple-silicon Macs.
 
 Check out my video on YouTube!
 
@@ -23,13 +24,16 @@ You can run CoordsFinder directly on Google Colab with [this notebook](TODO), wi
 
 ### Pre-built binaries
 
-Pre-built CPU and CUDA binaries are available for Windows and Linux. Download the latest release from the [releases page](https://github.com/ALaggyDev/CoordsFinder/releases/latest).
+Pre-built CPU and CUDA binaries are available for Windows and Linux. Apple-
+silicon releases include CPU and Metal in one macOS executable. Download the
+latest release from the [releases page](https://github.com/ALaggyDev/CoordsFinder/releases/latest).
 
 Pre-built binaries have the following minimum versions:
 
 -   Minimum CUDA version: 12.8
 -   Minimum GPU compute capability: Turing (GTX 16, RTX 20 series)
 -   Glibc: 2.35 (Linux)
+-   macOS 13 and an M1 or newer Mac (Metal)
 
 ### Build with CMake
 
@@ -38,6 +42,7 @@ Requirements:
 -   CMake 3.24 or newer
 -   A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
 -   Optional: NVIDIA CUDA Toolkit for the CUDA backend
+-   macOS: Xcode command-line tools; Metal is enabled by default on Apple platforms
 
 CPU-only:
 
@@ -55,7 +60,16 @@ cmake --build --preset cuda-release
 # ctest --preset cuda-release
 ```
 
-On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On Linux, it is under `build/<preset>/coordsfinder`.
+CPU + Metal (Apple silicon):
+
+```sh
+cmake --preset metal-release
+cmake --build --preset metal-release
+# ctest --preset metal-release
+```
+
+On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`.
+On Linux and macOS, it is under `build/<preset>/coordsfinder`.
 
 ## Run
 
@@ -68,14 +82,20 @@ To run CoordsFinder, provide a search config file as the first argument:
 CLI options:
 
 ```text
--b, --backend auto|cpu|cuda  Select the execution backend
+-b, --backend auto|cpu|cuda|metal  Select the execution backend
 -t, --threads N              Set CPU worker count
 -e, --validate               Validate and summarize without scanning
 -h, --help                   Show all options
 -v, --version                Show the version
 ```
 
-The `auto` backend selects CUDA when it was compiled in and a CUDA device is available; otherwise it selects CPU.
+The `auto` backend selects CUDA when it was compiled in and a CUDA device is
+available, then Metal on Apple silicon, and otherwise CPU. Select Metal
+explicitly with:
+
+```sh
+coordsfinder --backend metal ./example.conf
+```
 
 ## Search config
 
@@ -96,6 +116,7 @@ errorTolerance = 0                # Maximum number of texture rotation errors ac
 
 cpuTileSize = (1024, 1024)
 cudaTileSize = (16384, 16384)
+metalTileSize = (16384, 16384)
 verbose = false
 
 [filter]
@@ -159,6 +180,7 @@ The default settings for tile sizes and verbosity are reasonable and do not need
 ```ini
 cpuTileSize = (1024, 1024)
 cudaTileSize = (16384, 16384)
+metalTileSize = (16384, 16384)
 verbose = false
 ```
 
@@ -188,6 +210,10 @@ Benchmark setup:
 | ------------------- | --------------- | ---------------- | --------------- |
 | Peak position/sec   | 168M            | 1,860M           | **103,000M!**      |
 | Estimated time      | 20 hours 5 mins | 1 hours 48 mins  | **2 mins 5 secs!** |
+
+On a 10-core Apple M4 GPU, the Metal backend scans the checked-in six-billion-
+position `example.conf` at approximately **6,380M positions/sec**. Metal speed
+varies with the GPU generation, core count, Y range, filter, and tolerance.
 
 ## FAQs
 
@@ -224,20 +250,23 @@ I will spare my words here and instead link to these amazing resources that expl
 
 WebCoordsFinder is a web-based app. It allows users to upload a screenshot, draw the grid, mark the texture rotations, and either perform the scan on the app or download a config file to use in CoordsFinder. It is a convenient way to generate a config file without having to painstakingly mark and write it by hand.
 
-CoordsFinder is a command-line tool that performs the actual bruteforce search. It supports CUDA and is much faster than the built-in WebCoordsFinder scanner.
+CoordsFinder is a command-line tool that performs the actual bruteforce search. It supports CUDA and Metal and is much faster than the built-in WebCoordsFinder scanner.
 
 In short: Start with WebCoordsFinder, and either use the built-in scanner or use CoordsFinder.
 
 ### I don't have a Nvidia GPU but I want to scan faster! What should I do?
 
-Use the free Google Colab notebook in [here](TODO)!
+On an M1 or newer Mac, build or download the Metal version and select
+`--backend metal`. On other systems, use the free Google Colab notebook in
+[here](TODO)!
 
 ### How is CoordsFinder so fast?
 
 It is fast because:
 - It is written in C++, which is a compiled language.
 - It uses GPU acceleration to massively parallelize the search.
-- Careful optimizations such as reducing warp divergence and using constant memory are made to the CUDA backend.
+- Careful optimizations such as reducing warp divergence, using constant memory,
+  and sharing X/Z setup across vertical candidates are made to the GPU backends.
 
 In the future, I may look into alternative searching algorithms such as the [Boyer-Moore algorithm](https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm) to further improve performance. Optimization improvements and suggestions are very much appreciated!
 

@@ -15,3 +15,14 @@ jobs:
         run: cmake --build --preset cpu-release
       - name: Test
         run: ctest --preset cpu-release
+
+  metal:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure
+        run: cmake --preset metal-release
+      - name: Build
+        run: cmake --build --preset metal-release --parallel
+      - name: Test CPU and Metal backends when a GPU is exposed
+        run: ctest --preset metal-release

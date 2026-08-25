@@ -116,6 +116,7 @@ void testConfigParsing()
     expect(loadScanConfig((root + "/tests/modern.conf").c_str(), &modern, &error), "load backend-specific tile config");
     expect(modern.cpuTileSize.x == 7 && modern.cpuTileSize.z == 9, "load CPU tile sizes");
     expect(modern.cudaTileSize.x == 70 && modern.cudaTileSize.z == 90, "load CUDA tile sizes");
+    expect(modern.metalTileSize.x == 700 && modern.metalTileSize.z == 900, "load Metal tile sizes");
     expect(modern.errorTolerance == 2, "load error tolerance");
     expect(!modern.verbose, "load verbose setting");
     expect(modern.scanOrder == ScanOrder::Spiral, "load spiral scan order");
@@ -216,6 +217,107 @@ void testCpuScan()
     expect(actual == expected, "multithreaded CPU scan matches scalar results");
     expect(threadedState.candidates.load() == 25, "multithreaded CPU candidate count");
 }
+
+#if defined(COORDSFINDER_HAS_METAL)
+using MatchKey = std::tuple<int, int, int, int, int>;
+
+std::multiset<MatchKey> matchKeys(const std::vector<Match>& matches)
+{
+    std::multiset<MatchKey> keys;
+    for (const Match& match : matches) {
+        keys.emplace(
+            match.x,
+            match.y,
+            match.z,
+            match.mismatches,
+            match.direction);
+    }
+    return keys;
+}
+
+void testMetalScan()
+{
+    std::string reason;
+    if (!metalAvailable(&reason)) {
+        std::printf("Skipping Metal runtime tests: %s.\n", reason.c_str());
+        return;
+    }
+
+    const TextureAlgorithm modes[] = {
+        TextureAlgorithm::Vanilla1,
+        TextureAlgorithm::Vanilla2,
+        TextureAlgorithm::Vanilla3,
+        TextureAlgorithm::Sodium1,
+        TextureAlgorithm::Sodium2,
+    };
+    for (TextureAlgorithm mode : modes) {
+        ScanConfig config = baseConfig();
+        config.algorithm = mode;
+        config.directions = { 0, 90 };
+        config.xRange = { -2, 2 };
+        // Cross both the old 16-Y and optimized 128-Y chunk boundaries.
+        config.yRange = { -64, 66 };
+        config.zRange = { -1, 2 };
+        config.cpuTileSize = { 4, 3 };
+        config.metalTileSize = { 4, 3 };
+        config.filter = {
+            RotationInfo(1, 0, -1, 2),
+            RotationInfo(0, 1, 0, 1, true),
+        };
+
+        std::string error;
+        ScanPlan plan;
+        expect(makeScanPlan(config, config.metalTileSize, &plan, &error), "build Metal parity plan");
+
+        ScanState cpuState;
+        std::vector<Match> cpuMatches;
+        expect(runCpuScan(
+            config,
+            plan,
+            2,
+            &cpuState,
+            [&](const std::vector<Match>& batch) {
+                cpuMatches.insert(cpuMatches.end(), batch.begin(), batch.end());
+            },
+            &error), "run CPU parity reference");
+
+        ScanState metalState;
+        std::vector<Match> metalMatches;
+        expect(runMetalScan(
+            config,
+            plan,
+            &metalState,
+            [&](const std::vector<Match>& batch) {
+                metalMatches.insert(metalMatches.end(), batch.begin(), batch.end());
+            },
+            &error), "run Metal parity scan");
+
+        expect(matchKeys(metalMatches) == matchKeys(cpuMatches), "Metal matches CPU for every texture algorithm");
+        expect(metalState.candidates.load() == cpuState.candidates.load(), "Metal parity candidate count");
+        expect(metalState.completedItems.load() == plan.items.size(), "Metal parity work-item count");
+    }
+
+    ScanConfig overflow = baseConfig();
+    overflow.xRange = { 0, 600 };
+    overflow.yRange = { 0, 128 };
+    overflow.zRange = { 0, 1 };
+    overflow.metalTileSize = { 600, 1 };
+    overflow.errorTolerance = 1;
+    ScanPlan overflowPlan;
+    std::string error;
+    expect(makeScanPlan(overflow, overflow.metalTileSize, &overflowPlan, &error), "build Metal overflow plan");
+    ScanState overflowState;
+    std::uint64_t emitted = 0;
+    expect(runMetalScan(
+        overflow,
+        overflowPlan,
+        &overflowState,
+        [&](const std::vector<Match>& batch) { emitted += batch.size(); },
+        &error), "retry overflowing Metal result batches");
+    expect(emitted == 76800, "Metal overflow retry preserves every match");
+    expect(overflowState.candidates.load() == 76800, "Metal overflow retry counts candidates once");
+}
+#endif
 }
 
 int main()
@@ -225,6 +327,9 @@ int main()
     testConfigParsing();
     testScanOrders();
     testCpuScan();
+#if defined(COORDSFINDER_HAS_METAL)
+    testMetalScan();
+#endif
     if (failures != 0) {
         std::fprintf(stderr, "%d test(s) failed.\n", failures);
         return EXIT_FAILURE;
