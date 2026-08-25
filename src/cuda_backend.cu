@@ -1,57 +1,69 @@
 #include "runner.hpp"
 
-#include <algorithm>
 #include <array>
-#include <cstdio>
+#include <cstddef>
 #include <string>
 #include <vector>
 
 #define COORDSFINDER_GPU_CUDA
 #include "gpu_kernels.cuh"
+#include "gpu_backend.hpp"
 
 namespace {
 
-using coordsfinder_gpu::CandidatesPerThreadY;
-using coordsfinder_gpu::ResultCapacity;
-using coordsfinder_gpu::ThreadsX;
-using coordsfinder_gpu::ThreadsZ;
+struct CudaBackend {
+    static constexpr const char* name = "CUDA";
+    using Error = cudaError_t;
+    static constexpr Error success = cudaSuccess;
 
-const char* cudaMessage(cudaError_t error)
-{
-    return cudaGetErrorString(error);
-}
-
-bool check(cudaError_t result, const char* operation, std::string* error)
-{
-    if (result == cudaSuccess) {
-        return true;
+    static const char* errorString(Error error) { return cudaGetErrorString(error); }
+    static void drainError() { (void)cudaGetLastError(); }
+    static Error getDeviceCount(int* count) { return cudaGetDeviceCount(count); }
+    static Error getDeviceInfo(coordsfinder_gpu::DeviceInfo* info)
+    {
+        int device = 0;
+        const Error result = cudaGetDevice(&device);
+        if (result != cudaSuccess) {
+            return result;
+        }
+        cudaDeviceProp properties = {};
+        const Error propertiesResult = cudaGetDeviceProperties(&properties, device);
+        if (propertiesResult != cudaSuccess) {
+            return propertiesResult;
+        }
+        info->name = properties.name;
+        for (int axis = 0; axis < 3; ++axis) {
+            info->maxGridSize[axis] = properties.maxGridSize[axis];
+        }
+        return cudaSuccess;
     }
-    if (error) {
-        *error = std::string(operation) + ": " + cudaMessage(result);
+    static Error malloc(void** ptr, std::size_t bytes) { return cudaMalloc(ptr, bytes); }
+    static Error free(void* ptr) { return cudaFree(ptr); }
+    static Error memset(void* ptr, int value, std::size_t bytes) { return cudaMemset(ptr, value, bytes); }
+    static Error memcpyToHost(void* dst, const void* src, std::size_t bytes)
+    {
+        return cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost);
     }
-    return false;
-}
+    static Error synchronize() { return cudaDeviceSynchronize(); }
+    static Error uploadFilters(
+        const std::array<std::array<RotationInfo, MaxFilterCount>, MaxDirectionCount>& filters,
+        const std::array<int, MaxDirectionCount>& filterCounts)
+    {
+        const Error result = cudaMemcpyToSymbol(
+            coordsfinder_gpu::deviceFilters, filters.data(), sizeof(filters));
+        if (result != cudaSuccess) {
+            return result;
+        }
+        return cudaMemcpyToSymbol(
+            coordsfinder_gpu::deviceFilterCounts, filterCounts.data(), sizeof(filterCounts));
+    }
+};
 
 }
 
 bool cudaAvailable(std::string* reason)
 {
-    int deviceCount = 0;
-    const cudaError_t result = cudaGetDeviceCount(&deviceCount);
-    if (result != cudaSuccess) {
-        if (reason) {
-            *reason = cudaMessage(result);
-        }
-        cudaGetLastError();
-        return false;
-    }
-    if (deviceCount == 0) {
-        if (reason) {
-            *reason = "no CUDA device was found";
-        }
-        return false;
-    }
-    return true;
+    return coordsfinder_gpu::gpuAvailable<CudaBackend>(reason);
 }
 
 bool runCudaScan(
@@ -61,126 +73,5 @@ bool runCudaScan(
     const MatchSink& sink,
     std::string* error)
 {
-    std::array<std::array<RotationInfo, MaxFilterCount>, MaxDirectionCount> filters = {};
-    std::array<int, MaxDirectionCount> filterCounts = {};
-    for (std::size_t direction = 0; direction < config.directions.size(); ++direction) {
-        const std::vector<RotationInfo> transformed = makeDirectionalFilter(
-            config.filter,
-            config.directions[direction]);
-        std::copy(transformed.begin(), transformed.end(), filters[direction].begin());
-        filterCounts[direction] = static_cast<int>(transformed.size());
-    }
-
-    // Upload every direction once; spiral order can then switch directions per tile cheaply.
-    if (!check(cudaMemcpyToSymbol(coordsfinder_gpu::deviceFilters, filters.data(), sizeof(filters)), "upload filters", error)
-        || !check(cudaMemcpyToSymbol(coordsfinder_gpu::deviceFilterCounts, filterCounts.data(), sizeof(filterCounts)), "upload filter counts", error)) {
-        return false;
-    }
-
-    Match* deviceResults = nullptr;
-    unsigned int* deviceResultCount = nullptr;
-    int* deviceResultOverflow = nullptr;
-    if (!check(cudaMalloc(&deviceResults, sizeof(Match) * ResultCapacity), "allocate result buffer", error)
-        || !check(cudaMalloc(&deviceResultCount, sizeof(unsigned int)), "allocate result counter", error)
-        || !check(cudaMalloc(&deviceResultOverflow, sizeof(int)), "allocate result overflow flag", error)) {
-        cudaFree(deviceResults);
-        cudaFree(deviceResultCount);
-        cudaFree(deviceResultOverflow);
-        return false;
-    }
-
-    std::vector<Match> results(ResultCapacity);
-    cudaDeviceProp properties = {};
-    int device = 0;
-    if (!check(cudaGetDevice(&device), "get CUDA device", error)
-        || !check(cudaGetDeviceProperties(&properties, device), "get CUDA device properties", error)) {
-        cudaFree(deviceResults);
-        cudaFree(deviceResultCount);
-        cudaFree(deviceResultOverflow);
-        return false;
-    }
-    std::fprintf(stderr, "CUDA device: %s.\n", properties.name);
-
-    bool succeeded = true;
-    for (const WorkItem& item : plan.items) {
-        if (state->cancelRequested.load(std::memory_order_relaxed)) {
-            break;
-        }
-        if (config.verbose) {
-            std::fprintf(stderr,
-                "Scanning tile (%d, %d, %d) to (%d, %d, %d), direction %d.\n",
-                item.start.x,
-                item.start.y,
-                item.start.z,
-                item.end.x,
-                item.end.y,
-                item.end.z,
-                item.direction);
-        }
-
-        const std::uint32_t xCount = static_cast<std::uint32_t>(item.end.x - item.start.x);
-        const std::uint32_t yCount = static_cast<std::uint32_t>(item.end.y - item.start.y);
-        const std::uint32_t zCount = static_cast<std::uint32_t>(item.end.z - item.start.z);
-        if (xCount == 0 || yCount == 0 || zCount == 0) {
-            if (error) {
-                *error = "a CUDA tile spans the full 32-bit coordinate range; reduce cudaTileSize or the coordinate range";
-            }
-            succeeded = false;
-            break;
-        }
-        const dim3 block(ThreadsX, 1, ThreadsZ);
-        const dim3 grid(
-            1U + (xCount - 1U) / ThreadsX,
-            1U + (yCount - 1U) / CandidatesPerThreadY,
-            1U + (zCount - 1U) / ThreadsZ);
-        if (grid.x > static_cast<unsigned int>(properties.maxGridSize[0])
-            || grid.y > static_cast<unsigned int>(properties.maxGridSize[1])
-            || grid.z > static_cast<unsigned int>(properties.maxGridSize[2])) {
-            if (error) {
-                *error = "tile dimensions exceed this CUDA device's grid limits; reduce cudaTileSize";
-            }
-            succeeded = false;
-            break;
-        }
-
-        // One bounded buffer is reused and drained after each synchronized tile.
-        if (!check(cudaMemset(deviceResultCount, 0, sizeof(unsigned int)), "reset result counter", error)
-            || !check(cudaMemset(deviceResultOverflow, 0, sizeof(int)), "reset result overflow flag", error)
-            || !check(coordsfinder_gpu::launch(config.algorithm, item, config.errorTolerance, grid, block, deviceResults, deviceResultCount, deviceResultOverflow), "launch CUDA scan", error)
-            || !check(cudaDeviceSynchronize(), "run CUDA scan", error)) {
-            succeeded = false;
-            break;
-        }
-
-        unsigned int resultCount = 0;
-        int resultOverflow = 0;
-        if (!check(cudaMemcpy(&resultCount, deviceResultCount, sizeof(resultCount), cudaMemcpyDeviceToHost), "read result count", error)
-            || !check(cudaMemcpy(&resultOverflow, deviceResultOverflow, sizeof(resultOverflow), cudaMemcpyDeviceToHost), "read result overflow flag", error)) {
-            succeeded = false;
-            break;
-        }
-        if (resultOverflow) {
-            if (error) {
-                *error = "a tile produced more than 65536 matches; reduce cudaTileSize or tighten the filter";
-            }
-            succeeded = false;
-            break;
-        }
-        if (resultCount > 0) {
-            results.resize(resultCount);
-            if (!check(cudaMemcpy(results.data(), deviceResults, sizeof(Match) * resultCount, cudaMemcpyDeviceToHost), "download results", error)) {
-                succeeded = false;
-                break;
-            }
-            sink(results);
-            state->matches.fetch_add(resultCount, std::memory_order_relaxed);
-        }
-        state->candidates.fetch_add(workItemCandidateCount(item), std::memory_order_relaxed);
-        state->completedItems.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    cudaFree(deviceResults);
-    cudaFree(deviceResultCount);
-    cudaFree(deviceResultOverflow);
-    return succeeded;
+    return coordsfinder_gpu::runGpuScan<CudaBackend>(config, plan, state, sink, error);
 }

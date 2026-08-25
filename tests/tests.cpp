@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -165,6 +166,95 @@ void testScanOrders()
     expect(rectangle.items.size() == 8 && visited.size() == 8, "non-square spiral covers every clipped tile once");
 }
 
+#if defined(COORDSFINDER_HAS_CUDA) || defined(COORDSFINDER_HAS_HIP)
+bool matchesEqual(std::vector<Match> actual, std::vector<Match> expected)
+{
+    const auto order = [](const Match& m) {
+        return std::make_tuple(m.x, m.y, m.z, m.mismatches, m.direction);
+    };
+    std::sort(actual.begin(), actual.end(), [&](const Match& l, const Match& r) { return order(l) < order(r); });
+    std::sort(expected.begin(), expected.end(), [&](const Match& l, const Match& r) { return order(l) < order(r); });
+    if (actual.size() != expected.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        if (order(actual[i]) != order(expected[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void testGpuBackends()
+{
+    // Planted-match config: a six-entry filter anchored at (17, -4, -31) so the
+    // region yields a few thousand matches without overflowing result buffers.
+    ScanConfig config = baseConfig();
+    config.xRange = { 17, 517 };
+    config.yRange = { -4, 57 };
+    config.zRange = { -31, 469 };
+    config.cpuTileSize = { 512, 512 };
+    config.cudaTileSize = { 512, 512 };
+    config.filter = {
+        RotationInfo(0, 0, 0, 0),
+        RotationInfo(1, 0, 0, 0),
+        RotationInfo(0, 0, 1, 0),
+        RotationInfo(2, 0, 0, 0),
+        RotationInfo(0, 0, -1, 0),
+        RotationInfo(1, 0, 1, 0),
+    };
+    for (RotationInfo& info : config.filter) {
+        info.rotation = getTexture(config.algorithm, 17 + info.x, -4 + info.y, -31 + info.z, 4);
+    }
+
+    ScanPlan plan;
+    std::string error;
+    expect(makeScanPlan(config, config.cpuTileSize, &plan, &error), "build GPU test plan");
+
+    std::vector<Match> reference;
+    ScanState referenceState;
+    expect(runCpuScan(config, plan, 2, &referenceState, [&](const std::vector<Match>& batch) {
+        reference.insert(reference.end(), batch.begin(), batch.end());
+    }, &error), "run CPU reference scan");
+    expect(reference.size() > 1000, "GPU test reference produced enough matches");
+
+#if defined(COORDSFINDER_HAS_CUDA)
+    {
+        std::string reason;
+        if (!cudaAvailable(&reason)) {
+            std::printf("CUDA device unavailable, skipping GPU scan test (%s).\n", reason.c_str());
+        }
+        else {
+            std::vector<Match> actual;
+            ScanState scanState;
+            expect(runCudaScan(config, plan, &scanState, [&](const std::vector<Match>& batch) {
+                actual.insert(actual.end(), batch.begin(), batch.end());
+            }, &error), "run CUDA scan");
+            expect(actual.size() == reference.size(), "CUDA scan match count");
+            expect(matchesEqual(actual, reference), "CUDA scan matches CPU scan");
+        }
+    }
+#endif
+#if defined(COORDSFINDER_HAS_HIP)
+    {
+        std::string reason;
+        if (!hipAvailable(&reason)) {
+            std::printf("HIP device unavailable, skipping GPU scan test (%s).\n", reason.c_str());
+        }
+        else {
+            std::vector<Match> actual;
+            ScanState scanState;
+            expect(runHipScan(config, plan, &scanState, [&](const std::vector<Match>& batch) {
+                actual.insert(actual.end(), batch.begin(), batch.end());
+            }, &error), "run HIP scan");
+            expect(actual.size() == reference.size(), "HIP scan match count");
+            expect(matchesEqual(actual, reference), "HIP scan matches CPU scan");
+        }
+    }
+#endif
+}
+#endif
+
 void testCpuScan()
 {
     ScanConfig config = baseConfig();
@@ -226,6 +316,9 @@ int main()
     testConfigParsing();
     testScanOrders();
     testCpuScan();
+#if defined(COORDSFINDER_HAS_CUDA) || defined(COORDSFINDER_HAS_HIP)
+    testGpuBackends();
+#endif
     if (failures != 0) {
         std::fprintf(stderr, "%d test(s) failed.\n", failures);
         return EXIT_FAILURE;

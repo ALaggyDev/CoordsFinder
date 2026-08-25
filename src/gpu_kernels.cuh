@@ -23,6 +23,10 @@
 #include "textures.hpp"
 #include "types.hpp"
 
+// The device symbols and kernels further below live in an anonymous namespace
+// so every translation unit that includes this header gets its own internal
+// copies. That keeps the CUDA and HIP backends free to link into one binary
+// without ODR collisions.
 namespace coordsfinder_gpu {
 
 constexpr unsigned int ThreadsX = 16;
@@ -31,6 +35,8 @@ constexpr unsigned int ThreadsZ = 16;
 // register; larger values (64) were measured slower due to mask ALU cost.
 constexpr unsigned int CandidatesPerThreadY = 32;
 constexpr unsigned int ResultCapacity = 65536;
+
+namespace {
 
 // All transformed direction filters fit comfortably in constant memory.
 __device__ __constant__ RotationInfo deviceFilters[MaxDirectionCount][MaxFilterCount];
@@ -110,9 +116,13 @@ __global__ void bruteForceKernel(
 
 // Staged (filter-major) kernel: each thread owns CandidatesPerThreadY vertical
 // candidates packed into a survivor bitmask. Filter entry j is evaluated for
-// every live candidate before advancing to entry j+1, so the filter index is
-// warp-uniform and the data-dependent early exits (the dominant divergence
-// source in the scalar kernel) disappear.
+// every live candidate before advancing to entry j+1. Compared to the scalar
+// kernel this greatly reduces warp divergence, and it changes where the time
+// goes: filterIndex is warp-uniform (constant-memory fetches broadcast instead
+// of serializing), and the inner-loop samples are independent work rather than
+// one long serial dependency chain. Both kernels issue a similar number of
+// texture samples; the staged arrangement simply executes them far more
+// efficiently.
 //
 // Mismatch counts live in 2-bit saturating fields packed into a u64 (one field
 // per candidate). A saturated field means the count exceeds any supported
@@ -234,7 +244,7 @@ auto launchMode(
             resultCount,
             resultOverflow);
     }
-    else if (errorTolerance <= 3) {
+    else if (errorTolerance >= 1 && errorTolerance <= 3) {
         stagedBruteForceKernel<Mode, false><<<grid, block>>>(
             item.start,
             item.end,
@@ -246,8 +256,9 @@ auto launchMode(
             resultOverflow);
     }
     else {
-        // Packed saturating counters cannot represent tolerances above 3;
-        // keep the exact scalar kernel for those rare configurations.
+        // Packed saturating counters cannot represent tolerances above 3, and
+        // negative values would wrap under the uint64 comparison; route both to
+        // the exact scalar kernel.
         bruteForceKernel<Mode><<<grid, block>>>(
             item.start,
             item.end,
@@ -286,4 +297,5 @@ inline auto launch(
     }
 }
 
+}
 }

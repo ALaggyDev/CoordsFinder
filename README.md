@@ -2,7 +2,7 @@
 
 CoordsFinder is the fastest Minecraft texture rotation cracker for cracking coordinates from a screenshot!
 
-CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
+CoordsFinder supports a multithreaded CPU backend, a CUDA backend, and a HIP (AMD ROCm) backend.
 
 Check out my video on YouTube!
 
@@ -64,7 +64,7 @@ cmake --build --preset hip-release
 # ctest --preset hip-release
 ```
 
-Requires the ROCm HIP SDK (e.g. `rocm-hip-sdk`). The build targets most modern RDNA3/RDNA4 GPUs by default; pass `-DCMAKE_HIP_ARCHITECTURES=gfxXXXX` for other cards (e.g. `gfx1030` for the RX 6000 series). Select the backend with `-b hip`.
+Requires the ROCm HIP SDK (e.g. `rocm-hip-sdk`). The build targets most modern RDNA3/RDNA4 GPUs — desktops, laptops and APUs — by default; pass `-DCMAKE_HIP_ARCHITECTURES=gfxXXXX` for other cards (e.g. `gfx1030` for the RX 6000 series). Select the backend with `-b hip`.
 
 On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On Linux, it is under `build/<preset>/coordsfinder`.
 
@@ -202,7 +202,14 @@ Benchmark setup:
 
 ### Staged-kernel update
 
-The GPU backends were rewritten to eliminate warp divergence (see the FAQ below).
+The GPU backends use a "staged" kernel that keeps GPU lanes in lockstep: each
+thread tracks a column of 32 candidates in a bitmask, evaluates one filter row
+at a time across all surviving candidates, and packs per-candidate mismatch
+counts into 2-bit saturated fields. Compared to the previous candidate-major
+loop this greatly reduces warp divergence, makes every filter-row lookup
+warp-uniform, and turns the inner loop into independent work instead of one
+serial dependency chain.
+
 Measured on an RTX 3070 (Linux, GCC) with the same search area and `errorTolerance = 0`:
 
 |                        | GPU (CUDA), old kernel | GPU (CUDA), staged kernel |

@@ -15,3 +15,23 @@ jobs:
         run: cmake --build --preset cpu-release
       - name: Test
         run: ctest --preset cpu-release
+
+  cuda:
+    # Compile coverage for the CUDA backend on every push/PR. Hosted runners
+    # have no GPU, so the GPU runtime tests skip themselves gracefully.
+    runs-on: ubuntu-22.04
+    env:
+      CUDA_ARCHITECTURES: 75-real;86-real;89-real;120-real;120-virtual
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: "12.8.0"
+          method: network
+      - name: Configure
+        run: cmake --preset cuda-release -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES"
+      - name: Build
+        run: cmake --build --preset cuda-release
+      - name: Test
+        run: ctest --preset cuda-release
