@@ -37,3 +37,14 @@ bool runCudaScan(
     const MatchSink& sink,
     std::string* error);
 #endif
+
+#if defined(COORDSFINDER_HAS_METAL)
+bool metalAvailable(std::string* reason);
+
+bool runMetalScan(
+    const ScanConfig& config,
+    const ScanPlan& plan,
+    ScanState* state,
+    const MatchSink& sink,
+    std::string* error);
+#endif
