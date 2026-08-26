@@ -1,3 +1,9 @@
+//! `wgpu` compute backend for coordinate searches.
+//!
+//! The shader is specialized to the selected algorithm, filter length, Y
+//! range, and mismatch tolerance. Each plan tile is dispatched separately so
+//! result capacity and progress reporting remain bounded.
+
 use std::sync::mpsc;
 
 use bytemuck::{Pod, Zeroable};
@@ -10,8 +16,27 @@ use crate::types::{Match, RotationInfo};
 const RESULT_CAPACITY: u32 = 262_144;
 const WORKGROUP_XZ: u32 = 16;
 const CANDIDATES_PER_THREAD_Y: u32 = 16;
-const TEXTURE_ALGORITHM_COUNT: usize = 5;
-const SEARCH_PIPELINE_COUNT: usize = TEXTURE_ALGORITHM_COUNT * 2;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct ShaderSpecialization {
+    algorithm: crate::types::TextureAlgorithm,
+    error_tolerance: i32,
+    filter_count: usize,
+    y_start: i32,
+    y_end: i32,
+}
+
+impl From<&ScanConfig> for ShaderSpecialization {
+    fn from(config: &ScanConfig) -> Self {
+        Self {
+            algorithm: config.algorithm,
+            error_tolerance: config.error_tolerance,
+            filter_count: config.filter.len(),
+            y_start: config.y_range.start,
+            y_end: config.y_range.end,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -55,25 +80,28 @@ impl From<GpuResult> for Match {
     }
 }
 
+/// GPU scanner whose pipeline is specialized for the config passed to [`Self::new`].
 pub struct GpuScanner {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipelines: Box<[wgpu::ComputePipeline; SEARCH_PIPELINE_COUNT]>,
+    pipeline: Box<wgpu::ComputePipeline>,
     bind_group: wgpu::BindGroup,
     params: wgpu::Buffer,
     filters: wgpu::Buffer,
     results: wgpu::Buffer,
     counters: wgpu::Buffer,
+    specialization: ShaderSpecialization,
     adapter_name: String,
     max_workgroups_per_dimension: u32,
 }
 
 impl GpuScanner {
-    pub fn new() -> Result<Self, String> {
-        pollster::block_on(Self::new_async())
+    /// Initializes a compute device and compiles a pipeline for `config`.
+    pub fn new(config: &ScanConfig) -> Result<Self, String> {
+        pollster::block_on(Self::new_async(config))
     }
 
-    async fn new_async() -> Result<Self, String> {
+    async fn new_async(config: &ScanConfig) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -117,17 +145,19 @@ impl GpuScanner {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        // Specialization removes unused RNG paths and mismatch bookkeeping when
-        // the configured tolerance is zero.
-        let pipelines = Box::new(std::array::from_fn(|index| {
-            let algorithm = index / 2;
-            let zero_error_tolerance = index % 2;
-            let constants = [
-                ("TEXTURE_ALGORITHM", algorithm as f64),
-                ("ZERO_ERROR_TOLERANCE", zero_error_tolerance as f64),
-            ];
+        // A process scans one config, so compile only the exact kernel it needs.
+        let specialization = ShaderSpecialization::from(config);
+        let y_span = i64::from(specialization.y_end) - i64::from(specialization.y_start);
+        let constants = [
+            ("TEXTURE_ALGORITHM", specialization.algorithm as u32 as f64),
+            ("ERROR_TOLERANCE", specialization.error_tolerance as f64),
+            ("FILTER_COUNT", specialization.filter_count as f64),
+            ("Y_START", specialization.y_start as f64),
+            ("Y_SPAN", y_span as f64),
+        ];
+        let pipeline = Box::new(
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("CoordsFinder specialized search pipeline"),
+                label: Some("CoordsFinder config-specialized search pipeline"),
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some("search"),
@@ -136,12 +166,12 @@ impl GpuScanner {
                     ..Default::default()
                 },
                 cache: None,
-            })
-        }));
+            }),
+        );
 
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("search parameters"),
-            size: 10 * 4,
+            size: 5 * 4,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -173,21 +203,27 @@ impl GpuScanner {
         Ok(Self {
             device,
             queue,
-            pipelines,
+            pipeline,
             bind_group,
             params,
             filters,
             results,
             counters,
+            specialization,
             adapter_name: adapter.get_info().name,
             max_workgroups_per_dimension: limits.max_compute_workgroups_per_dimension,
         })
     }
 
+    /// Returns the human-readable name reported by the selected adapter.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
     }
 
+    /// Executes a plan one tile at a time and reports matches and progress.
+    ///
+    /// The config must have the specialization-sensitive values used to create
+    /// this scanner; changing those values requires constructing a new scanner.
     pub fn scan(
         &self,
         config: &ScanConfig,
@@ -196,9 +232,9 @@ impl GpuScanner {
         mut progress: impl FnMut(u64, usize),
         cancelled: impl Fn() -> bool,
     ) -> Result<(), String> {
-        let pipeline_index =
-            config.algorithm as usize * 2 + usize::from(config.error_tolerance == 0);
-        let pipeline = &self.pipelines[pipeline_index];
+        if self.specialization != ShaderSpecialization::from(config) {
+            return Err("GPU scanner was used with a different shader configuration".to_owned());
+        }
         let filters: Vec<Vec<GpuFilter>> = config
             .directions
             .iter()
@@ -233,15 +269,10 @@ impl GpuScanner {
             }
             let params = [
                 item.start.x as u32,
-                item.start.y as u32,
                 item.start.z as u32,
                 x_span,
-                y_span,
                 z_span,
-                config.error_tolerance as u32,
-                config.filter.len() as u32,
                 item.direction as u32,
-                RESULT_CAPACITY,
             ];
             self.queue
                 .write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
@@ -263,12 +294,14 @@ impl GpuScanner {
                     label: Some("CoordsFinder search pass"),
                     timestamp_writes: None,
                 });
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
             }
             self.queue.submit([encoder.finish()]);
 
+            // Reading the counters also waits for this tile's dispatch. Results
+            // are downloaded only when the shader reports at least one match.
             let counter_bytes = read_buffer(&self.device, &self.queue, &self.counters, 8)?;
             let counters: &[u32] = bytemuck::cast_slice(&counter_bytes);
             if counters[1] != 0 {
@@ -387,71 +420,67 @@ mod tests {
 
     #[test]
     fn gpu_matches_all_reference_algorithms_when_available() {
-        let Ok(scanner) = GpuScanner::new() else {
-            eprintln!("skipping GPU test: no compatible adapter");
-            return;
-        };
-        for (coordinate, algorithm) in [(17, -4, -31), (-1, -2, -3), (-29_999_984, -64, 29_999_983)]
-            .into_iter()
-            .flat_map(|coordinate| {
-                [
-                    TextureAlgorithm::Vanilla1,
-                    TextureAlgorithm::Vanilla2,
-                    TextureAlgorithm::Vanilla3,
-                    TextureAlgorithm::Sodium1,
-                    TextureAlgorithm::Sodium2,
-                ]
-                .map(|algorithm| (coordinate, algorithm))
-            })
-        {
-            let config = ScanConfig {
+        for algorithm in [
+            TextureAlgorithm::Vanilla1,
+            TextureAlgorithm::Vanilla2,
+            TextureAlgorithm::Vanilla3,
+            TextureAlgorithm::Sodium1,
+            TextureAlgorithm::Sodium2,
+        ] {
+            let mut config = ScanConfig {
                 algorithm,
                 scan_order: ScanOrder::Linear,
                 directions: vec![0],
-                x_range: IntRange {
+                x_range: IntRange { start: 0, end: 1 },
+                y_range: IntRange { start: 0, end: 1 },
+                z_range: IntRange { start: 0, end: 1 },
+                gpu_tile_size: TileSize { x: 1, z: 1 },
+                filter: vec![RotationInfo::new(0, 0, 0, 0, false)],
+                ..ScanConfig::default()
+            };
+            let Ok(scanner) = GpuScanner::new(&config) else {
+                eprintln!("skipping GPU test: no compatible adapter");
+                return;
+            };
+            for coordinate in [(0, 0, 0), (4096, 0, 4096), (-1, 0, -3)] {
+                config.x_range = IntRange {
                     start: coordinate.0,
                     end: coordinate.0 + 1,
-                },
-                y_range: IntRange {
-                    start: coordinate.1,
-                    end: coordinate.1 + 1,
-                },
-                z_range: IntRange {
+                };
+                config.z_range = IntRange {
                     start: coordinate.2,
                     end: coordinate.2 + 1,
-                },
-                gpu_tile_size: TileSize { x: 1, z: 1 },
-                filter: vec![RotationInfo::new(
+                };
+                config.filter[0] = RotationInfo::new(
                     0,
                     0,
                     0,
                     get_texture(algorithm, coordinate.0, coordinate.1, coordinate.2, 4),
                     false,
-                )],
-                ..ScanConfig::default()
-            };
-            let plan = make_plan(&config, config.gpu_tile_size).unwrap();
-            let mut matches = Vec::new();
-            scanner
-                .scan(
-                    &config,
-                    &plan,
-                    |batch| matches.extend_from_slice(batch),
-                    |_, _| {},
-                    || false,
-                )
-                .unwrap();
-            assert_eq!(
-                matches,
-                vec![Match {
-                    x: coordinate.0,
-                    y: coordinate.1,
-                    z: coordinate.2,
-                    mismatches: 0,
-                    direction: 0
-                }],
-                "{algorithm}"
-            );
+                );
+                let plan = make_plan(&config, config.gpu_tile_size).unwrap();
+                let mut matches = Vec::new();
+                scanner
+                    .scan(
+                        &config,
+                        &plan,
+                        |batch| matches.extend_from_slice(batch),
+                        |_, _| {},
+                        || false,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    matches,
+                    vec![Match {
+                        x: coordinate.0,
+                        y: coordinate.1,
+                        z: coordinate.2,
+                        mismatches: 0,
+                        direction: 0
+                    }],
+                    "{algorithm}"
+                );
+            }
         }
 
         // A tolerance equal to the one-filter length makes every coordinate a
@@ -470,6 +499,10 @@ mod tests {
             gpu_tile_size: TileSize { x: 9, z: 7 },
             filter: vec![RotationInfo::new(0, 0, 0, 0, false)],
             ..ScanConfig::default()
+        };
+        let Ok(scanner) = GpuScanner::new(&config) else {
+            eprintln!("skipping GPU test: no compatible adapter");
+            return;
         };
         let plan = make_plan(&config, config.gpu_tile_size).unwrap();
         let mut matches = Vec::new();

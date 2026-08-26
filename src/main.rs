@@ -56,7 +56,7 @@ struct Options {
 /// Runtime scanner selection after auto-detection and fallback.
 enum Scanner {
     Cpu(CpuScanner),
-    Gpu(GpuScanner),
+    Gpu(Box<GpuScanner>),
 }
 
 /// Shared reporting state works with both sequential GPU callbacks and
@@ -132,16 +132,19 @@ fn automatic_threads() -> usize {
         .unwrap_or(1)
 }
 
-fn select_scanner(options: &Options) -> Result<Scanner, String> {
+fn select_scanner(
+    options: &Options,
+    config: &coordsfinder::config::ScanConfig,
+) -> Result<Scanner, String> {
     let threads = options
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(automatic_threads);
     match options.backend {
         Backend::Cpu => CpuScanner::new(threads).map(Scanner::Cpu),
-        Backend::Gpu => GpuScanner::new().map(Scanner::Gpu),
-        Backend::Auto => match GpuScanner::new() {
-            Ok(scanner) => Ok(Scanner::Gpu(scanner)),
+        Backend::Gpu => GpuScanner::new(config).map(|scanner| Scanner::Gpu(Box::new(scanner))),
+        Backend::Auto => match GpuScanner::new(config) {
+            Ok(scanner) => Ok(Scanner::Gpu(Box::new(scanner))),
             Err(reason) => {
                 eprintln!("GPU unavailable ({reason}); falling back to CPU.");
                 CpuScanner::new(threads).map(Scanner::Cpu)
@@ -180,7 +183,7 @@ fn run(options: Options) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let scanner = select_scanner(&options)?;
+    let scanner = select_scanner(&options, &config)?;
     let tile_size = match &scanner {
         Scanner::Cpu(scanner) => {
             eprintln!("Backend: CPU ({} threads).", scanner.threads());
