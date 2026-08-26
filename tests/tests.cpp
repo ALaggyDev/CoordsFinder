@@ -120,6 +120,9 @@ void testConfigParsing()
     expect(modern.errorTolerance == 2, "load error tolerance");
     expect(!modern.verbose, "load verbose setting");
     expect(modern.scanOrder == ScanOrder::Spiral, "load spiral scan order");
+    ScanConfig example;
+    expect(loadScanConfig((root + "/example.conf").c_str(), &example, &error), "load example config");
+    expect(example.scanOrder == ScanOrder::Linear, "example config defaults to linear scanning");
     expect(!loadScanConfig((root + "/tests/invalid_duplicate.conf").c_str(), &modern, &error), "reject duplicate settings");
     expect(error.find("duplicate setting") != std::string::npos, "report duplicate setting clearly");
     expect(!loadScanConfig((root + "/tests/invalid_empty_range.conf").c_str(), &modern, &error), "reject empty scan ranges");
@@ -296,6 +299,69 @@ void testMetalScan()
         expect(metalState.candidates.load() == cpuState.candidates.load(), "Metal parity candidate count");
         expect(metalState.completedItems.load() == plan.items.size(), "Metal parity work-item count");
     }
+
+    for (TextureAlgorithm mode : modes) {
+        ScanConfig lattice = baseConfig();
+        lattice.algorithm = mode;
+        lattice.scanOrder = ScanOrder::Linear;
+        lattice.directions = { 90 };
+        lattice.xRange = { -8, 9 };
+        lattice.yRange = { -2, 3 };
+        lattice.zRange = { -8, 9 };
+        lattice.cpuTileSize = { 7, 6 };
+        lattice.metalTileSize = { 7, 6 };
+        lattice.filter = {
+            RotationInfo(-2, -1, -4, 3),
+            RotationInfo(-1, -1, -4, 3),
+            RotationInfo(-3, -1, -3, 3),
+            RotationInfo(-2, -1, -3, 3),
+        };
+        expect(metalUsesLatticeGate(lattice), "detect compatible 2x2 lattice gate");
+
+        std::string error;
+        ScanPlan plan;
+        expect(makeScanPlan(lattice, lattice.metalTileSize, &plan, &error), "build lattice parity plan");
+        ScanState cpuState;
+        std::vector<Match> cpuMatches;
+        expect(runCpuScan(
+            lattice,
+            plan,
+            2,
+            &cpuState,
+            [&](const std::vector<Match>& batch) {
+                cpuMatches.insert(cpuMatches.end(), batch.begin(), batch.end());
+            },
+            &error), "run lattice CPU reference");
+        ScanState metalState;
+        std::vector<Match> metalMatches;
+        expect(runMetalScan(
+            lattice,
+            plan,
+            &metalState,
+            [&](const std::vector<Match>& batch) {
+                metalMatches.insert(metalMatches.end(), batch.begin(), batch.end());
+            },
+            &error), "run optimized Metal lattice scan");
+        expect(matchKeys(metalMatches) == matchKeys(cpuMatches), "lattice gate matches CPU across texture modes and tile boundaries");
+        expect(metalState.candidates.load() == cpuState.candidates.load(), "lattice gate preserves logical candidate count");
+        expect(metalState.completedItems.load() == plan.items.size(), "lattice gate completes every tile");
+    }
+
+    ScanConfig fallback = baseConfig();
+    fallback.filter = {
+        RotationInfo(0, 0, 0, 2),
+        RotationInfo(1, 0, 0, 2),
+        RotationInfo(0, 0, 1, 2),
+        RotationInfo(1, 0, 1, 2),
+    };
+    fallback.scanOrder = ScanOrder::Spiral;
+    expect(!metalUsesLatticeGate(fallback), "spiral scan uses the baseline Metal kernel");
+    fallback.scanOrder = ScanOrder::Linear;
+    fallback.directions = { 0, 90 };
+    expect(!metalUsesLatticeGate(fallback), "multi-direction scan uses the baseline Metal kernel");
+    fallback.directions = { 0 };
+    fallback.errorTolerance = 1;
+    expect(!metalUsesLatticeGate(fallback), "tolerant scan uses the baseline Metal kernel");
 
     ScanConfig overflow = baseConfig();
     overflow.xRange = { 0, 600 };

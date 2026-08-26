@@ -41,6 +41,8 @@ bool runCudaScan(
 #if defined(COORDSFINDER_HAS_METAL)
 bool metalAvailable(std::string* reason);
 
+bool metalUsesLatticeGate(const ScanConfig& config);
+
 bool runMetalScan(
     const ScanConfig& config,
     const ScanPlan& plan,

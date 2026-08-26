@@ -105,7 +105,7 @@ An example search config is included in [example.conf](./example.conf). It is a 
 # Comment starts with a hash. (#)
 
 algorithm = Vanilla-3             # Vanilla-1, Vanilla-2, Vanilla-3, Sodium-1, Sodium-2
-scanOrder = spiral                # linear, spiral
+scanOrder = linear                # linear (fastest on Metal), spiral
 directions = [0]                  # 0, 90, 180, 270
 
 xRange = (-5000, 5000)
@@ -148,8 +148,15 @@ Select the texture algorithm in the config. If unsure, use `Vanilla-3` as a safe
 ### Scan order
 
 Scan order determines the order in which tiles are scanned.
-- `linear` starts from the minimum X/Z corner to the maximum X/Z corner.
+- `linear` is the default and starts from the minimum X/Z corner to the maximum X/Z corner.
 - `spiral` begins at the center and scans in a clockwise spiral pattern.
+
+For compatible exact, single-direction Metal searches, linear mode enables a
+2x2 four-state lattice gate. On a 10-core M4 MacBook Air, the tested search ran
+at approximately **18.5G positions/sec** with linear plus the lattice gate,
+compared with **6.7G positions/sec** using spiral: roughly a 3x speedup. Other
+chips and filters will vary. Spiral can still find a coordinate near the center
+of the bounds earlier because it searches center-out.
 
 ### Directions
 
@@ -211,9 +218,11 @@ Benchmark setup:
 | Peak position/sec   | 168M            | 1,860M           | **103,000M!**      |
 | Estimated time      | 20 hours 5 mins | 1 hours 48 mins  | **2 mins 5 secs!** |
 
-On a 10-core Apple M4 GPU, the Metal backend scans the checked-in six-billion-
-position `example.conf` at approximately **6,380M positions/sec**. Metal speed
-varies with the GPU generation, core count, Y range, filter, and tolerance.
+On a 10-core Apple M4 GPU, compatible exact, single-direction linear searches
+reach approximately **18,500M positions/sec** with the 2x2 lattice gate,
+compared with approximately **6,700M positions/sec** in spiral mode. Metal
+speed varies with the GPU generation, core count, Y range, filter, and
+tolerance.
 
 ## FAQs
 
