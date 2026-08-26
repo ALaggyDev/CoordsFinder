@@ -1,0 +1,13 @@
+[package]
+name = "coordsfinder"
+version = "1.1.0"
+edition = "2024"
+rust-version = "1.87"
+license = "MIT"
+description = "Minecraft's Fastest Texture Rotation Cracker⚡"
+
+[dependencies]
+bytemuck = { version = "1.23", features = ["derive"] }
+pollster = "0.4"
+wgpu = "30"
+
