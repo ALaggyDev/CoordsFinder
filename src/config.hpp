@@ -28,7 +28,6 @@ struct ScanConfig {
 
     TileSize cpuTileSize = { 1024, 1024 };
     TileSize cudaTileSize = { 16384, 16384 };
-    TileSize metalTileSize = { 16384, 16384 };
     bool verbose = false;
 
     std::vector<RotationInfo> filter;

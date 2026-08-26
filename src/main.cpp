@@ -21,7 +21,6 @@ enum class Backend {
     Auto,
     Cpu,
     Cuda,
-    Metal,
 };
 
 ScanState* activeState = nullptr;
@@ -39,7 +38,7 @@ void printUsage(const char* program)
         "CoordsFinder %s\n"
         "Usage: %s [options] <config-file>\n\n"
         "Options:\n"
-        "  -b, --backend auto|cpu|cuda|metal  Select the execution backend (default: auto)\n"
+        "  -b, --backend auto|cpu|cuda  Select the execution backend (default: auto)\n"
         "  -t, --threads N              CPU worker count (default: hardware threads)\n"
         "  -e, --validate               Validate and summarize without scanning\n"
         "  -h, --help                   Show this help\n"
@@ -62,25 +61,7 @@ bool parseBackend(const char* text, Backend* backend)
         *backend = Backend::Cuda;
         return true;
     }
-    if (std::strcmp(text, "metal") == 0) {
-        *backend = Backend::Metal;
-        return true;
-    }
     return false;
-}
-
-const char* backendName(Backend backend)
-{
-    switch (backend) {
-    case Backend::Cuda:
-        return "CUDA";
-    case Backend::Metal:
-        return "Metal";
-    case Backend::Cpu:
-    case Backend::Auto:
-    default:
-        return "CPU";
-    }
 }
 
 bool parseThreads(const char* text, unsigned int* threads)
@@ -189,16 +170,13 @@ int main(int argc, char** argv)
     if (validateOnly) {
         ScanPlan cpuPlan;
         ScanPlan cudaPlan;
-        ScanPlan metalPlan;
         if (!makeScanPlan(config, config.cpuTileSize, &cpuPlan, &error)
-            || !makeScanPlan(config, config.cudaTileSize, &cudaPlan, &error)
-            || !makeScanPlan(config, config.metalTileSize, &metalPlan, &error)) {
+            || !makeScanPlan(config, config.cudaTileSize, &cudaPlan, &error)) {
             std::fprintf(stderr, "Scan plan error: %s\n", error.c_str());
             return 1;
         }
         printPlanSummary(stdout, "CPU", cpuPlan);
         printPlanSummary(stdout, "CUDA", cudaPlan);
-        printPlanSummary(stdout, "Metal", metalPlan);
         std::printf("Config and backend plans are valid.\n");
         return 0;
     }
@@ -207,64 +185,33 @@ int main(int argc, char** argv)
 #if defined(COORDSFINDER_HAS_CUDA)
     std::string cudaReason;
     const bool hasCuda = cudaAvailable(&cudaReason);
+    // Auto gracefully falls back to CPU when the binary has no usable CUDA device.
+    if (backend == Backend::Auto) {
+        backend = hasCuda ? Backend::Cuda : Backend::Cpu;
+    }
     if (backend == Backend::Cuda && !hasCuda) {
         std::fprintf(stderr, "CUDA is unavailable: %s\n", cudaReason.c_str());
         return 1;
     }
 #else
     if (backend == Backend::Cuda) {
-        std::fprintf(stderr, "This build does not include CUDA. Reconfigure with COORDSFINDER_ENABLE_CUDA=ON.\n");
+        std::fprintf(stderr, "This is a CPU-only build. Reconfigure with COORDSFINDER_ENABLE_CUDA=ON.\n");
         return 1;
     }
+    backend = Backend::Cpu;
 #endif
-
-#if defined(COORDSFINDER_HAS_METAL)
-    std::string metalReason;
-    const bool hasMetal = metalAvailable(&metalReason);
-    if (backend == Backend::Metal && !hasMetal) {
-        std::fprintf(stderr, "Metal is unavailable: %s\n", metalReason.c_str());
-        return 1;
-    }
-#else
-    if (backend == Backend::Metal) {
-        std::fprintf(stderr, "This build does not include Metal. Reconfigure with COORDSFINDER_ENABLE_METAL=ON on macOS.\n");
-        return 1;
-    }
-#endif
-
-    // Preserve CUDA as the first automatic GPU choice, then use Metal on
-    // Apple silicon, and finally fall back to the portable CPU backend.
-    if (backend == Backend::Auto) {
-#if defined(COORDSFINDER_HAS_CUDA)
-        if (hasCuda) {
-            backend = Backend::Cuda;
-        }
-        else
-#endif
-#if defined(COORDSFINDER_HAS_METAL)
-        if (hasMetal) {
-            backend = Backend::Metal;
-        }
-        else
-#endif
-        {
-            backend = Backend::Cpu;
-        }
-    }
 
     const TileSize tileSize = backend == Backend::Cuda
         ? config.cudaTileSize
-        : backend == Backend::Metal
-            ? config.metalTileSize
-            : config.cpuTileSize;
+        : config.cpuTileSize;
     ScanPlan plan;
     if (!makeScanPlan(config, tileSize, &plan, &error)) {
         std::fprintf(stderr, "Scan plan error: %s\n", error.c_str());
         return 1;
     }
-    printPlanSummary(stderr, backendName(backend), plan);
+    printPlanSummary(stderr, backend == Backend::Cuda ? "CUDA" : "CPU", plan);
 
-    std::fprintf(stderr, "Backend: %s", backendName(backend));
+    std::fprintf(stderr, "Backend: %s", backend == Backend::Cuda ? "CUDA" : "CPU");
     if (backend == Backend::Cpu) {
         if (threadCount == 0) {
             const unsigned int available = std::thread::hardware_concurrency();
@@ -322,13 +269,8 @@ int main(int argc, char** argv)
         succeeded = runCpuScan(config, plan, threadCount, &state, sink, &error);
     }
 #if defined(COORDSFINDER_HAS_CUDA)
-    else if (backend == Backend::Cuda) {
+    else {
         succeeded = runCudaScan(config, plan, &state, sink, &error);
-    }
-#endif
-#if defined(COORDSFINDER_HAS_METAL)
-    else if (backend == Backend::Metal) {
-        succeeded = runMetalScan(config, plan, &state, sink, &error);
     }
 #endif
 

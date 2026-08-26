@@ -32,10 +32,6 @@ jobs:
             os: ubuntu-22.04
             preset: cuda-release
             cuda: true
-          - target: macos-metal
-            os: macos-15
-            preset: metal-release
-            cuda: false
     runs-on: ${{ matrix.os }}
     env:
       CUDA_ARCHITECTURES: 75-real;86-real;89-real;120-real;120-virtual
@@ -62,7 +58,7 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
 
-      - name: Test non-CUDA build
+      - name: Test CPU build
         if: ${{ !matrix.cuda }}
         run: ctest --preset ${{ matrix.preset }}
 

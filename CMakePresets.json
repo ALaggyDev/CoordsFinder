@@ -12,8 +12,7 @@
       "binaryDir": "${sourceDir}/build/cpu-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "COORDSFINDER_ENABLE_CUDA": "OFF",
-        "COORDSFINDER_ENABLE_METAL": "OFF"
+        "COORDSFINDER_ENABLE_CUDA": "OFF"
       }
     },
     {
@@ -23,20 +22,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "COORDSFINDER_ENABLE_CUDA": "ON",
-        "COORDSFINDER_ENABLE_METAL": "OFF",
         "CMAKE_CUDA_ARCHITECTURES": "native"
-      }
-    },
-    {
-      "name": "metal-release",
-      "displayName": "CPU + Metal release (macOS)",
-      "binaryDir": "${sourceDir}/build/metal-release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "COORDSFINDER_ENABLE_CUDA": "OFF",
-        "COORDSFINDER_ENABLE_METAL": "ON",
-        "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
       }
     }
   ],
@@ -49,11 +35,6 @@
     {
       "name": "cuda-release",
       "configurePreset": "cuda-release",
-      "configuration": "Release"
-    },
-    {
-      "name": "metal-release",
-      "configurePreset": "metal-release",
       "configuration": "Release"
     }
   ],
@@ -69,14 +50,6 @@
     {
       "name": "cuda-release",
       "configurePreset": "cuda-release",
-      "configuration": "Release",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "metal-release",
-      "configurePreset": "metal-release",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true
