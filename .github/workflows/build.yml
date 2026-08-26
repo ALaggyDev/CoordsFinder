@@ -5,13 +5,16 @@ on:
   pull_request:
 
 jobs:
-  cpu:
-    runs-on: ubuntu-22.04
+  rust:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Configure
-        run: cmake --preset cpu-release
-      - name: Build
-        run: cmake --build --preset cpu-release
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt -- --check
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: ctest --preset cpu-release
+        run: cargo test --all-targets

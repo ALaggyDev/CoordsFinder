@@ -2,16 +2,17 @@
 
 CoordsFinder is the fastest Minecraft texture rotation cracker for cracking coordinates from a screenshot!
 
-CoordsFinder supports a multithreaded CPU backend and a CUDA backend.
+CoordsFinder is written in Rust and includes a portable multithreaded CPU backend and a [wgpu](https://wgpu.rs/) compute backend, so one build works across CPU-only systems, Vulkan, DirectX 12, and Metal.
 
 Check out my video on YouTube!
 
 Links:
-- [Youtube Video](https://www.youtube.com/watch?v=gXTN9DD_Cp0)
+
+- [YouTube Video](https://www.youtube.com/watch?v=gXTN9DD_Cp0)
 - [WebCoordsFinder](https://github.com/ALaggyDev/WebCoordsFinder)
 - [Colab Notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing)
 
-If you like this project, please star it on Github and share it with your friends!
+If you like this project, please star it on GitHub and share it with your friends!
 
 If you want to include CoordsFinder in your own video/project, please credit me and my project as a gesture of kindness. Thank you!
 
@@ -19,70 +20,62 @@ If you want to include CoordsFinder in your own video/project, please credit me 
 
 ### Google Colab
 
-You can run CoordsFinder directly on Google Colab with [this notebook](TODO), without needing to install anything! (Nvidia Tesla T4 GPU is available for free!)
+You can run CoordsFinder directly on Google Colab with [this notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing), without needing to install anything! An NVIDIA Tesla T4 GPU is available for free.
 
 ### Pre-built binaries
 
-Pre-built CPU and CUDA binaries are available for Windows and Linux. Download the latest release from the [releases page](https://github.com/ALaggyDev/CoordsFinder/releases/latest).
+Pre-built binaries are available for Windows, Linux, and Apple-silicon Macs. Each binary includes both the CPU and GPU backends. Download the latest version from the [releases page](https://github.com/ALaggyDev/CoordsFinder/releases/latest).
 
-Pre-built binaries have the following minimum versions:
+The CPU backend has no additional runtime requirements. The optional GPU backend needs a driver with wgpu's `SHADER_INT64` feature. This is available through Vulkan, DirectX 12 with DXC, and Metal 2.3+ on supported hardware. In the default `auto` mode, CoordsFinder uses a compatible GPU when available and otherwise falls back to CPU.
 
--   Minimum CUDA version: 12.8
--   Minimum GPU compute capability: Turing (GTX 16, RTX 20 series)
--   Glibc: 2.35 (Linux)
-
-### Build with CMake
+### Build with Cargo
 
 Requirements:
 
--   CMake 3.24 or newer
--   A C++20 compiler: Visual Studio 2022 on Windows, or GCC/Clang on Linux
--   Optional: NVIDIA CUDA Toolkit for the CUDA backend
+- Rust 1.87 or newer
+- A supported GPU and driver if you want to use the optional GPU backend
 
-CPU-only:
-
-```sh
-cmake --preset cpu-release
-cmake --build --preset cpu-release
-# ctest --preset cpu-release
-```
-
-CPU + CUDA:
+Build and test:
 
 ```sh
-cmake --preset cuda-release
-cmake --build --preset cuda-release
-# ctest --preset cuda-release
+cargo build --release
+cargo test
 ```
 
-On Windows, the executable is under `build\<preset>\Release\coordsfinder.exe`. On Linux, it is under `build/<preset>/coordsfinder`.
+The executable is `target/release/coordsfinder` (`coordsfinder.exe` on Windows).
 
 ## Run
 
 To run CoordsFinder, provide a search config file as the first argument:
 
 ```sh
-<coordsfinder_exe> ./example.conf
+coordsfinder ./example.conf
 ```
 
 CLI options:
 
 ```text
--b, --backend auto|cpu|cuda  Select the execution backend
--t, --threads N              Set CPU worker count
--e, --validate               Validate and summarize without scanning
--h, --help                   Show all options
--v, --version                Show the version
+-b, --backend <auto|cpu|gpu>  Select the execution backend (default: auto)
+-t, --threads <N>             Set the CPU worker count
+-e, --validate                Validate and summarize without scanning
+-h, --help                    Show all options
+-v, --version                 Show the version
 ```
 
-The `auto` backend selects CUDA when it was compiled in and a CUDA device is available; otherwise it selects CPU.
+For example, to select the CPU backend explicitly and use eight worker threads:
+
+```sh
+coordsfinder --backend cpu --threads 8 ./example.conf
+```
+
+Only matches are written to standard output. Device information, progress, and completion status are written to standard error, so match output can be redirected safely. Press Ctrl+C to stop; CPU workers poll between X/Z columns and the GPU backend stops after its active tile.
 
 ## Search config
 
-An example search config is included in [example.conf](./example.conf). It is a simple INI-like file with the following sections:
+An example search config is included in [`example.conf`](./example.conf). It is a simple INI-like file with the following sections:
 
 ```ini
-# Comment starts with a hash. (#)
+# Comments start with a hash. (#)
 
 algorithm = Vanilla-3             # Vanilla-1, Vanilla-2, Vanilla-3, Sodium-1, Sodium-2
 scanOrder = spiral                # linear, spiral
@@ -95,7 +88,7 @@ zRange = (-5000, 5000)
 errorTolerance = 0                # Maximum number of texture rotation errors accepted
 
 cpuTileSize = (1024, 1024)
-cudaTileSize = (16384, 16384)
+gpuTileSize = (16384, 16384)
 verbose = false
 
 [filter]
@@ -106,7 +99,7 @@ verbose = false
 -5 0 -1 | 1 side
 ```
 
-More examples can be found in the [example](./examples) folder.
+More examples can be found in the [`examples`](./examples) folder.
 
 ### Algorithm
 
@@ -118,33 +111,34 @@ Select the texture algorithm in the config. If unsure, use `Vanilla-3` as a safe
 | 1.13-1.21.1       | `Vanilla-2` |
 | 1.21.2+           | `Vanilla-3` |
 
-| Sodium version | Minecraft version | Algorithm              |
-| -------------- | ----------------- | ---------------------- |
-| 1.0-4.1        | 1.16-1.18.2       | `Sodium-1`             |
-| 4.2-4.8        | 1.19-1.19.3       | `Sodium-2`             |
-| 4.9+           | 1.19.3+           | Use the Minecraft mode |
+| Sodium version | Minecraft version | Algorithm                     |
+| -------------- | ----------------- | ----------------------------- |
+| 1.0-4.1        | 1.16-1.18.2       | `Sodium-1`                    |
+| 4.2-4.8        | 1.19-1.19.3       | `Sodium-2`                    |
+| 4.9+           | 1.19.3+           | Use the matching Vanilla mode |
 
 ### Scan order
 
 Scan order determines the order in which tiles are scanned.
-- `linear` starts from the minimum X/Z corner to the maximum X/Z corner.
+
+- `linear` starts from the minimum X/Z corner and moves to the maximum X/Z corner.
 - `spiral` begins at the center and scans in a clockwise spiral pattern.
 
 ### Directions
 
-`directions` are **very important** if the cardinal direction of the screenshot is unknown. `directions` tells CoordsFinder if it should rotates the filter offsets and variants.
+`directions` are **very important** if the cardinal direction of the screenshot is unknown. They tell CoordsFinder whether it should rotate the filter offsets and variants.
 
 ```ini
 directions = [0, 90, 180, 270]
 ```
 
-For example, if `directions = [0, 180]`, CoordsFinder will both scan the filter as-is and *also* scan the filter rotated 180 degrees horizontally.
+For example, if `directions = [0, 180]`, CoordsFinder scans the filter as-is and also scans it rotated 180 degrees horizontally. Four-state top-face samples are rotated with the direction; two-state `side` samples are not.
 
 If the screenshot direction is unknown, it is recommended to use `directions = [0, 90, 180, 270]` or `directions = [0, 180]`.
 
 ### Scan ranges
 
-Self-explanatory. Range ends are exclusive.
+The scan ranges define the candidate coordinate area. Range ends are exclusive.
 
 ### Error tolerance
 
@@ -154,15 +148,15 @@ Note that error tolerance **severely impacts** performance. It is not recommende
 
 ### Tile sizes & verbosity (advanced)
 
-The default settings for tile sizes and verbosity are reasonable and do not need to be changed typically.
+The default tile sizes and verbosity are reasonable and typically do not need to be changed.
 
 ```ini
 cpuTileSize = (1024, 1024)
-cudaTileSize = (16384, 16384)
+gpuTileSize = (16384, 16384)
 verbose = false
 ```
 
-Tile size determines the area scanned per work item. Verbose mode prints out the output for each work item.
+The selected backend uses its matching tile size, which determines the X/Z area scanned per work item. Reduce `gpuTileSize` if a tile could produce more than 262,144 matches or exceeds an adapter's dispatch limits. The legacy `cudaTileSize` name is accepted as an alias for `gpuTileSize`, so existing configs continue to work. Verbose mode prints progress for every work item.
 
 ### Filters
 
@@ -173,7 +167,7 @@ x y z | variant
 x y z | variant side
 ```
 
-The first 3 numbers are the relative block coordinates to an origin. The fourth number is the texture variant. The optional `side` keyword indicates that the filter is a side face.
+The first three numbers are the relative block coordinates to an origin. The fourth number is the texture variant. The optional `side` keyword indicates that the filter is a side face.
 
 ## Speed
 
@@ -194,6 +188,7 @@ Benchmark setup:
 ### Which blocks have texture rotations?
 
 Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. Note that I may have missed some blocks, and not all of them have been tested.
+
 - Grass block
 - Rooted Dirt
 - Dirt
@@ -217,6 +212,7 @@ Flower random offsets are not part of the texture rotation algorithm (block vari
 ### How does texture rotation cracking even work?
 
 I will spare my words here and instead link to these amazing resources that explain the concept in detail:
+
 - [Texture Rotation Reverser Java](https://github.com/19MisterX98/TextureRotations) by 19MisterX98
 - [Texture Exploit Guide](https://gitea.com/ChromeCrusher/Texploit-Guide) by ChromeCrusher
 
@@ -224,34 +220,36 @@ I will spare my words here and instead link to these amazing resources that expl
 
 WebCoordsFinder is a web-based app. It allows users to upload a screenshot, draw the grid, mark the texture rotations, and either perform the scan on the app or download a config file to use in CoordsFinder. It is a convenient way to generate a config file without having to painstakingly mark and write it by hand.
 
-CoordsFinder is a command-line tool that performs the actual bruteforce search. It supports CUDA and is much faster than the built-in WebCoordsFinder scanner.
+CoordsFinder is a command-line tool that performs the actual brute-force search. It supports multithreaded CPU scanning and GPU acceleration through wgpu, and is much faster than the built-in WebCoordsFinder scanner on supported hardware.
 
 In short: Start with WebCoordsFinder, and either use the built-in scanner or use CoordsFinder.
 
-### I don't have a Nvidia GPU but I want to scan faster! What should I do?
+### I don't have a compatible GPU but I want to scan faster! What should I do?
 
-Use the free Google Colab notebook in [here](TODO)!
+Use the free [Google Colab notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing)!
 
 ### How is CoordsFinder so fast?
 
 It is fast because:
-- It is written in C++, which is a compiled language.
-- It uses GPU acceleration to massively parallelize the search.
-- Careful optimizations such as reducing warp divergence and using constant memory are made to the CUDA backend.
 
-In the future, I may look into alternative searching algorithms such as the [Boyer-Moore algorithm](https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm) to further improve performance. Optimization improvements and suggestions are very much appreciated!
+- It is written in Rust, which is a compiled language with predictable performance.
+- It uses multithreading on the CPU and compute shaders on the GPU to massively parallelize the search.
+- The search implementations avoid unnecessary work in their inner loops and share precomputed scan data across candidates.
+
+Optimization improvements and suggestions are very much appreciated!
 
 ### Why is texture rotation cracking relatively unknown to the Minecraft community?
 
-Honestly I have no idea. Texture rotation cracking is certainly not a new concept, and there's a lot of information about it online (The earliest reference I can find was from 2019 by [hacker mann](https://www.youtube.com/watch?v=6__hO4cc1pA)!). However, most of the information just didn't reach the general Minecraft community somehow. Instead, bedrock cracking and "cloud cracking" have taken the spotlight instead of texture rotation cracking, which is a shame.
+Honestly I have no idea. Texture rotation cracking is certainly not a new concept, and there's a lot of information about it online (the earliest reference I can find was from 2019 by [hacker mann](https://www.youtube.com/watch?v=6__hO4cc1pA)!). However, most of the information just didn't reach the general Minecraft community somehow. Instead, bedrock cracking and "cloud cracking" have taken the spotlight instead of texture rotation cracking, which is a shame.
 
 Now, WebCoordsFinder basically perfected texture rotation cracking and made it accessible to everyone. I hope that this project will help spread awareness of texture rotation cracking and its immense power!
 
 ## Contributing
 
-TLDR: The project creator (which is me, Laggy) is a person who **learns to code** well before the era of AIs. As such, he cares about code quality and code elegance well more than the "new-gen AI coders".
+TLDR: The project creator (which is me, Laggy) is a person who **learned to code** well before the era of AIs. As such, he cares about code quality and code elegance well more than the "new-gen AI coders".
 
 AI-generated PRs are allowed, with the following requirements:
+
 - Please review the code and write the PR description yourself (as a **human**). You should understand your code and are responsible for your code.
 - Keep the code change minimal and scoped as much as possible.
 - Avoid optimizations that make the code hard or impossible to read.

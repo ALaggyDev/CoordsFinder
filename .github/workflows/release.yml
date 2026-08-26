@@ -16,54 +16,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: windows-cpu
+          - target: windows-x86_64
             os: windows-2022
-            preset: cpu-release
-            cuda: false
-          - target: windows-cuda
-            os: windows-2022
-            preset: cuda-release
-            cuda: true
-          - target: linux-cpu
-            os: ubuntu-22.04
-            preset: cpu-release
-            cuda: false
-          - target: linux-cuda
-            os: ubuntu-22.04
-            preset: cuda-release
-            cuda: true
+          - target: linux-x86_64
+            os: ubuntu-24.04
+          - target: macos-arm64
+            os: macos-14
     runs-on: ${{ matrix.os }}
-    env:
-      CUDA_ARCHITECTURES: 75-real;86-real;89-real;120-real;120-virtual
 
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install CUDA toolkit
-        if: matrix.cuda
-        uses: Jimver/cuda-toolkit@v0.2.36
-        with:
-          cuda: "12.8.0"
-          method: network
-
-      - name: Configure
-        shell: bash
-        run: |
-          if [[ "${{ matrix.cuda }}" == "true" ]]; then
-            cmake --preset "${{ matrix.preset }}" -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES"
-          else
-            cmake --preset "${{ matrix.preset }}"
-          fi
-
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }} --parallel
-
-      - name: Test CPU build
-        if: ${{ !matrix.cuda }}
-        run: ctest --preset ${{ matrix.preset }}
-
-      - name: Install
-        run: cmake --install build/${{ matrix.preset }} --prefix dist
+        run: cargo build --release --locked
 
       - name: Name release asset
         shell: bash
@@ -72,7 +37,7 @@ jobs:
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             extension=".exe"
           fi
-          mv "dist/bin/coordsfinder$extension" "coordsfinder-${{ matrix.target }}$extension"
+          mv "target/release/coordsfinder$extension" "coordsfinder-${{ matrix.target }}$extension"
 
       - name: Upload release asset
         uses: actions/upload-artifact@v7
