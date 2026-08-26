@@ -92,6 +92,7 @@ pub struct GpuScanner {
     counters: wgpu::Buffer,
     specialization: ShaderSpecialization,
     adapter_name: String,
+    adapter_backend: wgpu::Backend,
     max_workgroups_per_dimension: u32,
 }
 
@@ -110,10 +111,11 @@ impl GpuScanner {
             })
             .await
             .map_err(|error| format!("could not find a wgpu adapter: {error}"))?;
+        let adapter_info = adapter.get_info();
         if !adapter.features().contains(wgpu::Features::SHADER_INT64) {
             return Err(format!(
                 "wgpu adapter '{}' does not support 64-bit shader integers",
-                adapter.get_info().name
+                adapter_info.name
             ));
         }
         let limits = adapter.limits();
@@ -210,7 +212,8 @@ impl GpuScanner {
             results,
             counters,
             specialization,
-            adapter_name: adapter.get_info().name,
+            adapter_name: adapter_info.name,
+            adapter_backend: adapter_info.backend,
             max_workgroups_per_dimension: limits.max_compute_workgroups_per_dimension,
         })
     }
@@ -218,6 +221,11 @@ impl GpuScanner {
     /// Returns the human-readable name reported by the selected adapter.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    /// Returns the graphics API used by the selected adapter.
+    pub fn adapter_backend(&self) -> wgpu::Backend {
+        self.adapter_backend
     }
 
     /// Executes a plan one tile at a time and reports matches and progress.

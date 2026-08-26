@@ -190,7 +190,11 @@ fn run(options: Options) -> Result<ExitCode, String> {
             config.cpu_tile_size
         }
         Scanner::Gpu(scanner) => {
-            eprintln!("Backend: wgpu ({}).", scanner.adapter_name());
+            eprintln!(
+                "Backend: wgpu/{:?} ({}).",
+                scanner.adapter_backend(),
+                scanner.adapter_name()
+            );
             config.gpu_tile_size
         }
     };
