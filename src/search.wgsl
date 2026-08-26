@@ -32,6 +32,7 @@ const JAVA_MULTIPLIER: u64 = 0x5deece66dlu;
 const JAVA_MASK: u64 = 0xfffffffffffflu;
 const SODIUM_PHI: u64 = 0x9e3779b97f4a7c15lu;
 override TEXTURE_ALGORITHM: u32 = 0u;
+override ZERO_ERROR_TOLERANCE: bool = false;
 
 fn coordinate_random_raw(x: i32, y: i32, z: i32) -> i64 {
     let seed = i64(x * 3129871i) ^ i64(z) * 116129781li ^ i64(y);
@@ -129,25 +130,46 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
             y + sample.values.y,
             z + sample.values.z,
         );
-        if (variant & (properties >> 8u)) != (properties & 0xffu) {
-            mismatches++;
-        }
-        filter_index++;
+        let mismatch = (variant & (properties >> 8u)) != (properties & 0xffu);
 
-        if mismatches > error_tolerance {
-            y++;
-            filter_index = 0u;
-            mismatches = 0u;
-        } else if filter_index == filter_count {
-            let result_index = atomicAdd(&counters[0], 1u);
-            if result_index < params.result_capacity {
-                results[result_index] = SearchResult(x, y, z, i32(mismatches), bitcast<i32>(params.direction));
+        if ZERO_ERROR_TOLERANCE {
+            if mismatch {
+                y++;
+                filter_index = 0u;
             } else {
-                atomicStore(&counters[1], 1u);
+                filter_index++;
+                if filter_index == filter_count {
+                    let result_index = atomicAdd(&counters[0], 1u);
+                    if result_index < params.result_capacity {
+                        results[result_index] = SearchResult(x, y, z, 0i, bitcast<i32>(params.direction));
+                    } else {
+                        atomicStore(&counters[1], 1u);
+                    }
+                    y++;
+                    filter_index = 0u;
+                }
             }
-            y++;
-            filter_index = 0u;
-            mismatches = 0u;
+        } else {
+            if mismatch {
+                mismatches++;
+            }
+            filter_index++;
+
+            if mismatches > error_tolerance {
+                y++;
+                filter_index = 0u;
+                mismatches = 0u;
+            } else if filter_index == filter_count {
+                let result_index = atomicAdd(&counters[0], 1u);
+                if result_index < params.result_capacity {
+                    results[result_index] = SearchResult(x, y, z, i32(mismatches), bitcast<i32>(params.direction));
+                } else {
+                    atomicStore(&counters[1], 1u);
+                }
+                y++;
+                filter_index = 0u;
+                mismatches = 0u;
+            }
         }
     }
 }

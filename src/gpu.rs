@@ -11,6 +11,7 @@ const RESULT_CAPACITY: u32 = 262_144;
 const WORKGROUP_XZ: u32 = 16;
 const CANDIDATES_PER_THREAD_Y: u32 = 16;
 const TEXTURE_ALGORITHM_COUNT: usize = 5;
+const SEARCH_PIPELINE_COUNT: usize = TEXTURE_ALGORITHM_COUNT * 2;
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -57,7 +58,7 @@ impl From<GpuResult> for Match {
 pub struct GpuScanner {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipelines: Box<[wgpu::ComputePipeline; TEXTURE_ALGORITHM_COUNT]>,
+    pipelines: Box<[wgpu::ComputePipeline; SEARCH_PIPELINE_COUNT]>,
     bind_group: wgpu::BindGroup,
     params: wgpu::Buffer,
     filters: wgpu::Buffer,
@@ -116,9 +117,15 @@ impl GpuScanner {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        // Specialization removes the four unused 64-bit RNG paths from each pipeline.
-        let pipelines = Box::new(std::array::from_fn(|algorithm| {
-            let constants = [("TEXTURE_ALGORITHM", algorithm as f64)];
+        // Specialization removes unused RNG paths and mismatch bookkeeping when
+        // the configured tolerance is zero.
+        let pipelines = Box::new(std::array::from_fn(|index| {
+            let algorithm = index / 2;
+            let zero_error_tolerance = index % 2;
+            let constants = [
+                ("TEXTURE_ALGORITHM", algorithm as f64),
+                ("ZERO_ERROR_TOLERANCE", zero_error_tolerance as f64),
+            ];
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("CoordsFinder specialized search pipeline"),
                 layout: Some(&pipeline_layout),
@@ -189,7 +196,9 @@ impl GpuScanner {
         mut progress: impl FnMut(u64, usize),
         cancelled: impl Fn() -> bool,
     ) -> Result<(), String> {
-        let pipeline = &self.pipelines[config.algorithm as usize];
+        let pipeline_index =
+            config.algorithm as usize * 2 + usize::from(config.error_tolerance == 0);
+        let pipeline = &self.pipelines[pipeline_index];
         let filters: Vec<Vec<GpuFilter>> = config
             .directions
             .iter()
