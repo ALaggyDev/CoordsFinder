@@ -1,6 +1,7 @@
 //! Core types and algorithms for CoordsFinder.
 
 pub mod config;
+pub mod gpu;
 pub mod scan;
 pub mod texture;
 pub mod types;
