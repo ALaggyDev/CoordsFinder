@@ -312,9 +312,6 @@ bool applySetting(ScanConfig* config, SettingFlags* flags, const std::string& ke
     if (name == "cudatilesize") {
         return parseTileSize(value, &config->cudaTileSize);
     }
-    if (name == "metaltilesize") {
-        return parseTileSize(value, &config->metalTileSize);
-    }
     if (name == "errortolerance") {
         flags->errorTolerance = parseInt(value, &config->errorTolerance);
         return flags->errorTolerance;
@@ -374,13 +371,6 @@ bool validateConfig(const ScanConfig& config, const SettingFlags& flags, std::st
     if (config.cudaTileSize.x <= 0 || config.cudaTileSize.z <= 0) {
         if (error) {
             *error = "cudaTileSize dimensions must be positive";
-        }
-        return false;
-    }
-
-    if (config.metalTileSize.x <= 0 || config.metalTileSize.z <= 0) {
-        if (error) {
-            *error = "metalTileSize dimensions must be positive";
         }
         return false;
     }
