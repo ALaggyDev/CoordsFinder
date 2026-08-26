@@ -156,6 +156,7 @@ impl GpuScanner {
         plan: &ScanPlan,
         mut sink: impl FnMut(&[Match]),
         mut progress: impl FnMut(u64, usize),
+        cancelled: impl Fn() -> bool,
     ) -> Result<(), String> {
         let filters: Vec<Vec<GpuFilter>> = config
             .directions
@@ -170,6 +171,9 @@ impl GpuScanner {
 
         let mut candidates = 0_u64;
         for (index, item) in plan.items.iter().enumerate() {
+            if cancelled() {
+                break;
+            }
             let x_span = (i64::from(item.end.x) - i64::from(item.start.x)) as u32;
             let y_span = (i64::from(item.end.y) - i64::from(item.start.y)) as u32;
             let z_span = (i64::from(item.end.z) - i64::from(item.start.z)) as u32;
@@ -304,28 +308,49 @@ mod tests {
     use crate::types::TextureAlgorithm;
 
     #[test]
+    fn search_shader_is_valid_wgsl() {
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("search.wgsl")).unwrap();
+        let mut validator = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::SHADER_INT64,
+        );
+        validator.validate(&module).unwrap();
+    }
+
+    #[test]
     fn gpu_matches_all_reference_algorithms_when_available() {
         let Ok(scanner) = GpuScanner::new() else {
             eprintln!("skipping GPU test: no compatible adapter");
             return;
         };
-        let coordinate = (17, -4, -31);
-        for algorithm in [
-            TextureAlgorithm::Vanilla1,
-            TextureAlgorithm::Vanilla2,
-            TextureAlgorithm::Vanilla3,
-            TextureAlgorithm::Sodium1,
-            TextureAlgorithm::Sodium2,
-        ] {
+        for (coordinate, algorithm) in [(17, -4, -31), (-1, -2, -3), (-29_999_984, -64, 29_999_983)]
+            .into_iter()
+            .flat_map(|coordinate| {
+                [
+                    TextureAlgorithm::Vanilla1,
+                    TextureAlgorithm::Vanilla2,
+                    TextureAlgorithm::Vanilla3,
+                    TextureAlgorithm::Sodium1,
+                    TextureAlgorithm::Sodium2,
+                ]
+                .map(|algorithm| (coordinate, algorithm))
+            })
+        {
             let config = ScanConfig {
                 algorithm,
                 scan_order: ScanOrder::Linear,
                 directions: vec![0],
-                x_range: IntRange { start: 17, end: 18 },
-                y_range: IntRange { start: -4, end: -3 },
+                x_range: IntRange {
+                    start: coordinate.0,
+                    end: coordinate.0 + 1,
+                },
+                y_range: IntRange {
+                    start: coordinate.1,
+                    end: coordinate.1 + 1,
+                },
                 z_range: IntRange {
-                    start: -31,
-                    end: -30,
+                    start: coordinate.2,
+                    end: coordinate.2 + 1,
                 },
                 gpu_tile_size: TileSize { x: 1, z: 1 },
                 filter: vec![RotationInfo::new(
@@ -345,14 +370,15 @@ mod tests {
                     &plan,
                     |batch| matches.extend_from_slice(batch),
                     |_, _| {},
+                    || false,
                 )
                 .unwrap();
             assert_eq!(
                 matches,
                 vec![Match {
-                    x: 17,
-                    y: -4,
-                    z: -31,
+                    x: coordinate.0,
+                    y: coordinate.1,
+                    z: coordinate.2,
                     mismatches: 0,
                     direction: 0
                 }],

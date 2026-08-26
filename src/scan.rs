@@ -1,6 +1,12 @@
+//! Backend-independent scan planning and filter rotation.
+//!
+//! Plans split the X/Z search area into half-open tiles. Each tile is repeated
+//! for every requested direction; CPU and GPU backends consume the same plan.
+
 use crate::config::{ScanConfig, ScanOrder, TileSize, rotate_xz};
 use crate::types::{Int3, RotationInfo};
 
+/// A half-open 3D tile paired with one structure direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkItem {
     pub start: Int3,
@@ -9,6 +15,7 @@ pub struct WorkItem {
     pub direction: i32,
 }
 
+/// Ordered work items and their aggregate candidate count.
 #[derive(Clone, Debug, Default)]
 pub struct ScanPlan {
     pub items: Vec<WorkItem>,
@@ -16,6 +23,10 @@ pub struct ScanPlan {
     pub total_candidates_saturated: bool,
 }
 
+/// Rotates a filter into world orientation and prioritizes selective samples.
+///
+/// Four-way top/bottom faces rotate with the structure. Side faces retain
+/// their two-state variant because a quarter turn does not change that state.
 pub fn directional_filter(filter: &[RotationInfo], direction: i32) -> Vec<RotationInfo> {
     let mut result: Vec<_> = filter
         .iter()
@@ -30,6 +41,7 @@ pub fn directional_filter(filter: &[RotationInfo], direction: i32) -> Vec<Rotati
             item
         })
         .collect();
+    // Four-state samples reject random candidates more often, so test them first.
     result.sort_by_key(|item| std::cmp::Reverse(item.visible_mask));
     result
 }
@@ -38,6 +50,7 @@ fn span(start: i32, end: i32) -> u64 {
     (i64::from(end) - i64::from(start)) as u64
 }
 
+/// Returns the number of coordinates in a work item and whether it overflowed.
 pub fn candidate_count(item: &WorkItem) -> (u64, bool) {
     let mut count = 1_u64;
     for dimension in [
@@ -53,6 +66,10 @@ pub fn candidate_count(item: &WorkItem) -> (u64, bool) {
     (count, false)
 }
 
+/// Builds the complete tile sequence for a scan configuration.
+///
+/// Candidate totals saturate at [`u64::MAX`], while an unrepresentable number
+/// of work items is rejected because the plan must store every item explicitly.
 pub fn make_plan(config: &ScanConfig, tile_size: TileSize) -> Result<ScanPlan, String> {
     if tile_size.x <= 0 || tile_size.z <= 0 {
         return Err("tile dimensions must be positive".to_owned());
@@ -119,6 +136,9 @@ pub fn make_plan(config: &ScanConfig, tile_size: TileSize) -> Result<ScanPlan, S
             }
         }
         ScanOrder::Spiral => {
+            // Start at the tile containing the range midpoint, then trace the
+            // perimeter of successively larger squares. `emit` clips each ring
+            // to rectangular and one-tile-wide plans.
             let center_x = ((x_span - 1) / 2 / tile_x) as i64;
             let center_z = ((z_span - 1) / 2 / tile_z) as i64;
             let max_radius = [

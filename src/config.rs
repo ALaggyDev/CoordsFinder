@@ -1,3 +1,9 @@
+//! Configuration-file parsing and validation.
+//!
+//! Ranges use half-open `[start, end)` bounds throughout the scanner. Parsing
+//! accepts the legacy spelling of several settings, but produces one normalized
+//! [`ScanConfig`] for both backends.
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -5,24 +11,28 @@ use std::str::FromStr;
 
 use crate::types::{MAX_FILTER_COUNT, RotationInfo, TextureAlgorithm};
 
+/// A half-open integer range used for one scan axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IntRange {
     pub start: i32,
     pub end: i32,
 }
 
+/// Horizontal dimensions of one independently scheduled scan tile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TileSize {
     pub x: i32,
     pub z: i32,
 }
 
+/// The order in which scan tiles are visited.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScanOrder {
     Linear,
     Spiral,
 }
 
+/// Fully parsed and validated settings for a coordinate search.
 #[derive(Clone, Debug)]
 pub struct ScanConfig {
     pub algorithm: TextureAlgorithm,
@@ -164,6 +174,7 @@ fn line_error(path: &Path, line: usize, message: impl std::fmt::Display) -> Stri
     format!("{}:{line}: {message}", path.display())
 }
 
+/// Loads, parses, and validates a scan configuration file.
 pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
     let path = path.as_ref();
     let contents = fs::read_to_string(path)
@@ -177,6 +188,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
 
     for (index, original) in contents.lines().enumerate() {
         let line_number = index + 1;
+        // Comments are deliberately stripped before section and value parsing.
         let line = original.split('#').next().unwrap_or_default().trim();
         if line.is_empty() {
             continue;
@@ -219,8 +231,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
                 TextureAlgorithm::from_str(value).map(|parsed| config.algorithm = parsed)
             }
             "scanorder" => match value.to_ascii_lowercase().as_str() {
-                "linear" | "native" => Ok(config.scan_order = ScanOrder::Linear),
-                "spiral" => Ok(config.scan_order = ScanOrder::Spiral),
+                "linear" | "native" => {
+                    config.scan_order = ScanOrder::Linear;
+                    Ok(())
+                }
+                "spiral" => {
+                    config.scan_order = ScanOrder::Spiral;
+                    Ok(())
+                }
                 _ => Err(format!("invalid scan order '{value}'")),
             },
             "directions" => parse_directions(value).map(|parsed| config.directions = parsed),
@@ -246,6 +264,15 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
             _ => Err(format!("unknown setting '{}'", key.trim())),
         };
         result.map_err(|error| line_error(path, line_number, error))?;
+    }
+
+    for required in ["algorithm", "xrange", "yrange", "zrange", "errortolerance"] {
+        if !seen.contains(required) {
+            return Err(format!(
+                "{}: missing required setting {required}",
+                path.display()
+            ));
+        }
     }
 
     validate(&config).map_err(|error| format!("{}: {error}", path.display()))?;

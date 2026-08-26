@@ -1,8 +1,12 @@
+//! Shared value types used by configuration, planning, and scan backends.
+
 use std::fmt;
 use std::str::FromStr;
 
+/// Maximum number of filter samples supported by the GPU uniform layout.
 pub const MAX_FILTER_COUNT: usize = 256;
 
+/// Texture randomization implementation to reproduce during a search.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum TextureAlgorithm {
@@ -41,6 +45,7 @@ impl FromStr for TextureAlgorithm {
     }
 }
 
+/// A signed three-dimensional coordinate or half-open bound.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Int3 {
     pub x: i32,
@@ -48,6 +53,7 @@ pub struct Int3 {
     pub z: i32,
 }
 
+/// One texture observation at an offset from a candidate origin.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RotationInfo {
     pub x: i8,
@@ -59,6 +65,7 @@ pub struct RotationInfo {
 }
 
 impl RotationInfo {
+    /// Creates a normalized observation for a four-state face or two-state side.
     pub fn new(x: i8, y: i8, z: i8, rotation: u8, side: bool) -> Self {
         let visible_mask = if side { 1 } else { 3 };
         Self {
@@ -71,6 +78,7 @@ impl RotationInfo {
     }
 }
 
+/// A candidate coordinate accepted by a scan backend.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Match {
     pub x: i32,
