@@ -8,26 +8,26 @@ use crate::scan::{ScanPlan, candidate_count, directional_filter};
 use crate::types::{Match, RotationInfo};
 
 const RESULT_CAPACITY: u32 = 262_144;
-const WORKGROUP_SIZE: u32 = 8;
+const WORKGROUP_XZ: u32 = 16;
+const CANDIDATES_PER_THREAD_Y: u32 = 16;
+const TEXTURE_ALGORITHM_COUNT: usize = 5;
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct GpuFilter {
-    x: u32,
-    y: u32,
-    z: u32,
-    rotation: u32,
-    visible_mask: u32,
+    // One 16-byte uniform record: xyz offsets, then rotation | visible_mask << 8.
+    values: [i32; 4],
 }
 
 impl From<RotationInfo> for GpuFilter {
     fn from(value: RotationInfo) -> Self {
         Self {
-            x: i32::from(value.x) as u32,
-            y: i32::from(value.y) as u32,
-            z: i32::from(value.z) as u32,
-            rotation: u32::from(value.rotation),
-            visible_mask: u32::from(value.visible_mask),
+            values: [
+                i32::from(value.x),
+                i32::from(value.y),
+                i32::from(value.z),
+                i32::from(value.rotation) | (i32::from(value.visible_mask) << 8),
+            ],
         }
     }
 }
@@ -57,7 +57,7 @@ impl From<GpuResult> for Match {
 pub struct GpuScanner {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: wgpu::ComputePipeline,
+    pipelines: Box<[wgpu::ComputePipeline; TEXTURE_ALGORITHM_COUNT]>,
     bind_group: wgpu::BindGroup,
     params: wgpu::Buffer,
     filters: wgpu::Buffer,
@@ -102,17 +102,48 @@ impl GpuScanner {
             label: Some("CoordsFinder search shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("search.wgsl").into()),
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("CoordsFinder search pipeline"),
-            layout: None,
-            module: &shader,
-            entry_point: Some("search"),
-            compilation_options: Default::default(),
-            cache: None,
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("CoordsFinder search bind group layout"),
+            entries: &[
+                uniform_layout_entry(0),
+                uniform_layout_entry(1),
+                storage_layout_entry(2, false),
+                storage_layout_entry(3, false),
+            ],
         });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("CoordsFinder search pipeline layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        // Specialization removes the four unused 64-bit RNG paths from each pipeline.
+        let pipelines = Box::new(std::array::from_fn(|algorithm| {
+            let constants = [("TEXTURE_ALGORITHM", algorithm as f64)];
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("CoordsFinder specialized search pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("search"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..Default::default()
+                },
+                cache: None,
+            })
+        }));
 
-        let params = storage_buffer(&device, "search parameters", 11 * 4, false);
-        let filters = storage_buffer(&device, "texture filters", 256 * 20, false);
+        let params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("search parameters"),
+            size: 10 * 4,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let filters = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("texture filters"),
+            size: 256 * size_of::<GpuFilter>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let result_bytes = u64::from(RESULT_CAPACITY) * size_of::<GpuResult>() as u64;
         let results = storage_buffer(&device, "search results", result_bytes, true);
         let counters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -124,7 +155,7 @@ impl GpuScanner {
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("CoordsFinder search bindings"),
-            layout: &pipeline.get_bind_group_layout(0),
+            layout: &bind_group_layout,
             entries: &[
                 binding(0, &params),
                 binding(1, &filters),
@@ -135,7 +166,7 @@ impl GpuScanner {
         Ok(Self {
             device,
             queue,
-            pipeline,
+            pipelines,
             bind_group,
             params,
             filters,
@@ -158,6 +189,7 @@ impl GpuScanner {
         mut progress: impl FnMut(u64, usize),
         cancelled: impl Fn() -> bool,
     ) -> Result<(), String> {
+        let pipeline = &self.pipelines[config.algorithm as usize];
         let filters: Vec<Vec<GpuFilter>> = config
             .directions
             .iter()
@@ -178,9 +210,9 @@ impl GpuScanner {
             let y_span = (i64::from(item.end.y) - i64::from(item.start.y)) as u32;
             let z_span = (i64::from(item.end.z) - i64::from(item.start.z)) as u32;
             let workgroups = [
-                x_span.div_ceil(WORKGROUP_SIZE),
-                z_span.div_ceil(WORKGROUP_SIZE),
-                y_span,
+                x_span.div_ceil(WORKGROUP_XZ),
+                y_span.div_ceil(CANDIDATES_PER_THREAD_Y),
+                z_span.div_ceil(WORKGROUP_XZ),
             ];
             if workgroups
                 .iter()
@@ -197,7 +229,6 @@ impl GpuScanner {
                 x_span,
                 y_span,
                 z_span,
-                config.algorithm as u32,
                 config.error_tolerance as u32,
                 config.filter.len() as u32,
                 item.direction as u32,
@@ -223,7 +254,7 @@ impl GpuScanner {
                     label: Some("CoordsFinder search pass"),
                     timestamp_writes: None,
                 });
-                pass.set_pipeline(&self.pipeline);
+                pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
             }
@@ -278,6 +309,32 @@ fn binding(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     }
 }
 
+fn storage_layout_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn uniform_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
 fn read_buffer(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -301,6 +358,8 @@ fn read_buffer(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::config::{IntRange, ScanOrder, TileSize};
     use crate::scan::make_plan;
@@ -384,6 +443,48 @@ mod tests {
                 }],
                 "{algorithm}"
             );
+        }
+
+        // A tolerance equal to the one-filter length makes every coordinate a
+        // match, exposing any skipped or duplicated candidates in Y batching.
+        let config = ScanConfig {
+            algorithm: TextureAlgorithm::Vanilla3,
+            scan_order: ScanOrder::Linear,
+            directions: vec![0],
+            x_range: IntRange { start: -4, end: 5 },
+            y_range: IntRange {
+                start: -17,
+                end: 18,
+            },
+            z_range: IntRange { start: -3, end: 4 },
+            error_tolerance: 1,
+            gpu_tile_size: TileSize { x: 9, z: 7 },
+            filter: vec![RotationInfo::new(0, 0, 0, 0, false)],
+            ..ScanConfig::default()
+        };
+        let plan = make_plan(&config, config.gpu_tile_size).unwrap();
+        let mut matches = Vec::new();
+        scanner
+            .scan(
+                &config,
+                &plan,
+                |batch| matches.extend_from_slice(batch),
+                |_, _| {},
+                || false,
+            )
+            .unwrap();
+        let coordinates: HashSet<_> = matches
+            .iter()
+            .map(|found| (found.x, found.y, found.z))
+            .collect();
+        assert_eq!(matches.len(), 9 * 35 * 7);
+        assert_eq!(coordinates.len(), matches.len());
+        for x in -4..5 {
+            for y in -17..18 {
+                for z in -3..4 {
+                    assert!(coordinates.contains(&(x, y, z)));
+                }
+            }
         }
     }
 }
