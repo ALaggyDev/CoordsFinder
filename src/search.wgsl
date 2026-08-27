@@ -1,5 +1,5 @@
 // GPU search kernel. Rust specializes the override constants once per config
-// and dispatches one X/Z plan tile at a time. Each invocation scans up to 16 Y
+// and dispatches one X/Z plan tile at a time. Each invocation scans up to 32 Y
 // coordinates for one X/Z coordinate.
 
 struct Filter {
@@ -113,7 +113,7 @@ fn texture_variant(x: i32, y: i32, z: i32) -> u32 {
 fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     let x_span = params.x_span;
     let z_span = params.z_span;
-    let y_base = id.y * 16u;
+    let y_base = id.y * 32u;
     if id.x >= x_span || id.z >= z_span || y_base >= Y_SPAN {
         return;
     }
@@ -121,7 +121,7 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = bitcast<i32>(params.start_x) + i32(id.x);
     let z = bitcast<i32>(params.start_z) + i32(id.z);
     var y = Y_START + i32(y_base);
-    let y_end = Y_START + i32(min(y_base + 16u, Y_SPAN));
+    let y_end = Y_START + i32(min(y_base + 32u, Y_SPAN));
     var filter_index = 0u;
     var mismatches = 0u;
     while y < y_end {

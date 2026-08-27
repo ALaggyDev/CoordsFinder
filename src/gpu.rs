@@ -15,7 +15,7 @@ use crate::types::{Match, RotationInfo};
 
 const RESULT_CAPACITY: u32 = 262_144;
 const WORKGROUP_XZ: u32 = 16;
-const CANDIDATES_PER_THREAD_Y: u32 = 16;
+const CANDIDATES_PER_THREAD_Y: u32 = 32;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct ShaderSpecialization {
