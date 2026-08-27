@@ -15,12 +15,34 @@ pub struct WorkItem {
     pub direction: i32,
 }
 
-/// Ordered work items and their aggregate candidate count.
-#[derive(Clone, Debug, Default)]
-pub struct ScanPlan {
-    pub items: Vec<WorkItem>,
+/// Maps work numbers to ordered work items without storing the item sequence.
+#[derive(Clone, Debug)]
+pub struct ScanPlan<'a> {
+    x_start: i32,
+    x_end: i32,
+    y_start: i32,
+    y_end: i32,
+    z_start: i32,
+    z_end: i32,
+    tile_x: u64,
+    tile_z: u64,
+    x_tiles: u64,
+    z_tiles: u64,
+    directions: &'a [i32],
+    scan_order: ScanOrder,
+    center_x: i64,
+    center_z: i64,
+    max_radius: i64,
+    total_items: usize,
     pub total_candidates: u64,
     pub total_candidates_saturated: bool,
+}
+
+/// Sequential view over an immutable [`ScanPlan`].
+#[derive(Clone, Debug)]
+pub struct WorkItems<'plan, 'config> {
+    plan: &'plan ScanPlan<'config>,
+    next: usize,
 }
 
 /// Rotates a filter into world orientation and prioritizes selective samples.
@@ -66,11 +88,11 @@ pub fn candidate_count(item: &WorkItem) -> (u64, bool) {
     (count, false)
 }
 
-/// Builds the complete tile sequence for a scan configuration.
+/// Builds a lazy tile sequence for a scan configuration.
 ///
-/// Candidate totals saturate at [`u64::MAX`], while an unrepresentable number
-/// of work items is rejected because the plan must store every item explicitly.
-pub fn make_plan(config: &ScanConfig, tile_size: TileSize) -> Result<ScanPlan, String> {
+/// Candidate totals saturate at [`u64::MAX`]. The iterator itself uses constant
+/// memory regardless of the number of work items.
+pub fn make_plan(config: &ScanConfig, tile_size: TileSize) -> Result<ScanPlan<'_>, String> {
     if tile_size.x <= 0 || tile_size.z <= 0 {
         return Err("tile dimensions must be positive".to_owned());
     }
@@ -84,94 +106,205 @@ pub fn make_plan(config: &ScanConfig, tile_size: TileSize) -> Result<ScanPlan, S
         .checked_mul(z_tiles)
         .and_then(|count| count.checked_mul(config.directions.len() as u64))
         .ok_or_else(|| "scan contains too many work items".to_owned())?;
-    let capacity = usize::try_from(work_count)
+    let total_items = usize::try_from(work_count)
         .map_err(|_| "scan contains too many work items for this build".to_owned())?;
-    let mut plan = ScanPlan {
-        items: Vec::with_capacity(capacity),
-        ..ScanPlan::default()
-    };
 
-    let mut add_tile = |tile_index_x: u64, tile_index_z: u64, direction_index: usize| {
-        let x_start = i64::from(config.x_range.start) + (tile_index_x * tile_x) as i64;
-        let z_start = i64::from(config.z_range.start) + (tile_index_z * tile_z) as i64;
-        let item = WorkItem {
+    let center_x = (x_tiles as i64 - 1) / 2;
+    let center_z = (z_tiles as i64 - 1) / 2;
+    let max_radius = [
+        center_x,
+        center_z,
+        x_tiles as i64 - 1 - center_x,
+        z_tiles as i64 - 1 - center_z,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0);
+    let dimensions = [
+        x_span,
+        span(config.y_range.start, config.y_range.end),
+        z_span,
+        config.directions.len() as u64,
+    ];
+    let total_candidates = dimensions.into_iter().try_fold(1_u64, u64::checked_mul);
+
+    Ok(ScanPlan {
+        x_start: config.x_range.start,
+        x_end: config.x_range.end,
+        y_start: config.y_range.start,
+        y_end: config.y_range.end,
+        z_start: config.z_range.start,
+        z_end: config.z_range.end,
+        tile_x,
+        tile_z,
+        x_tiles,
+        z_tiles,
+        directions: &config.directions,
+        scan_order: config.scan_order,
+        center_x,
+        center_z,
+        max_radius,
+        total_items,
+        total_candidates: total_candidates.unwrap_or(u64::MAX),
+        total_candidates_saturated: total_candidates.is_none(),
+    })
+}
+
+impl<'a> ScanPlan<'a> {
+    /// Returns the total number of work items.
+    pub fn total_items(&self) -> usize {
+        self.total_items
+    }
+
+    /// Converts a work number to its tile and direction.
+    pub fn work_item(&self, work_num: usize) -> Option<WorkItem> {
+        if work_num >= self.total_items {
+            return None;
+        }
+        let direction_index = work_num % self.directions.len();
+        let tile_num = u64::try_from(work_num / self.directions.len()).ok()?;
+        let (tile_index_x, tile_index_z) = match self.scan_order {
+            ScanOrder::Linear => (tile_num / self.z_tiles, tile_num % self.z_tiles),
+            ScanOrder::Spiral => self.spiral_tile(tile_num),
+        };
+
+        let x_start = i64::from(self.x_start) + (tile_index_x * self.tile_x) as i64;
+        let z_start = i64::from(self.z_start) + (tile_index_z * self.tile_z) as i64;
+        Some(WorkItem {
             start: Int3 {
                 x: x_start as i32,
-                y: config.y_range.start,
+                y: self.y_start,
                 z: z_start as i32,
             },
             end: Int3 {
-                x: (x_start + tile_x as i64).min(i64::from(config.x_range.end)) as i32,
-                y: config.y_range.end,
-                z: (z_start + tile_z as i64).min(i64::from(config.z_range.end)) as i32,
+                x: (x_start + self.tile_x as i64).min(i64::from(self.x_end)) as i32,
+                y: self.y_end,
+                z: (z_start + self.tile_z as i64).min(i64::from(self.z_end)) as i32,
             },
             direction_index,
-            direction: config.directions[direction_index],
-        };
-        let (candidates, saturated) = candidate_count(&item);
-        match plan.total_candidates.checked_add(candidates) {
-            Some(total) if !saturated => plan.total_candidates = total,
-            _ => {
-                plan.total_candidates = u64::MAX;
-                plan.total_candidates_saturated = true;
-            }
-        }
-        plan.items.push(item);
-    };
+            direction: self.directions[direction_index],
+        })
+    }
 
-    let mut emit = |x: i64, z: i64| {
-        if x >= 0 && z >= 0 && x < x_tiles as i64 && z < z_tiles as i64 {
-            for direction in 0..config.directions.len() {
-                add_tile(x as u64, z as u64, direction);
-            }
-        }
-    };
-
-    match config.scan_order {
-        ScanOrder::Linear => {
-            for x in 0..x_tiles {
-                for z in 0..z_tiles {
-                    emit(x as i64, z as i64);
-                }
-            }
-        }
-        ScanOrder::Spiral => {
-            // Start at the tile containing the range midpoint, then trace the
-            // perimeter of successively larger squares. `emit` clips each ring
-            // to rectangular and one-tile-wide plans.
-            let center_x = ((x_span - 1) / 2 / tile_x) as i64;
-            let center_z = ((z_span - 1) / 2 / tile_z) as i64;
-            let max_radius = [
-                center_x,
-                center_z,
-                x_tiles as i64 - 1 - center_x,
-                z_tiles as i64 - 1 - center_z,
-            ]
-            .into_iter()
-            .max()
-            .unwrap_or(0);
-            emit(center_x, center_z);
-            for radius in 1..=max_radius {
-                for z in center_z - radius + 1..=center_z + radius {
-                    emit(center_x + radius, z);
-                }
-                for x in (center_x - radius..=center_x + radius - 1).rev() {
-                    emit(x, center_z + radius);
-                }
-                for z in (center_z - radius..=center_z + radius - 1).rev() {
-                    emit(center_x - radius, z);
-                }
-                for x in center_x - radius + 1..=center_x + radius {
-                    emit(x, center_z - radius);
-                }
-            }
+    /// Returns a sequential iterator over all work items.
+    pub fn iter(&self) -> WorkItems<'_, 'a> {
+        WorkItems {
+            plan: self,
+            next: 0,
         }
     }
-    if plan.items.len() != capacity {
-        return Err("internal error: scan order did not cover every tile exactly once".to_owned());
+
+    fn covered_tiles(&self, radius: i64) -> u64 {
+        let x_min = (self.center_x - radius).max(0);
+        let x_max = (self.center_x + radius).min(self.x_tiles as i64 - 1);
+        let z_min = (self.center_z - radius).max(0);
+        let z_max = (self.center_z + radius).min(self.z_tiles as i64 - 1);
+        ((x_max - x_min + 1) as u64) * ((z_max - z_min + 1) as u64)
     }
-    Ok(plan)
+
+    fn spiral_tile(&self, tile_num: u64) -> (u64, u64) {
+        let mut low = 0;
+        let mut high = self.max_radius;
+        while low < high {
+            let radius = low + (high - low) / 2;
+            if tile_num < self.covered_tiles(radius) {
+                high = radius;
+            } else {
+                low = radius + 1;
+            }
+        }
+        let radius = low;
+        if radius == 0 {
+            return (self.center_x as u64, self.center_z as u64);
+        }
+
+        let mut offset = tile_num - self.covered_tiles(radius - 1);
+        let x_max = self.x_tiles as i64 - 1;
+        let z_max = self.z_tiles as i64 - 1;
+        for edge in 0..4 {
+            // Each corner belongs to exactly one edge, matching the original
+            // clockwise spiral order: right, top, left, then bottom.
+            let (fixed, start, end, step, fixed_x) = match edge {
+                0 => (
+                    self.center_x + radius,
+                    self.center_z - radius + 1,
+                    self.center_z + radius,
+                    1,
+                    true,
+                ),
+                1 => (
+                    self.center_z + radius,
+                    self.center_x + radius - 1,
+                    self.center_x - radius,
+                    -1,
+                    false,
+                ),
+                2 => (
+                    self.center_x - radius,
+                    self.center_z + radius - 1,
+                    self.center_z - radius,
+                    -1,
+                    true,
+                ),
+                3 => (
+                    self.center_z - radius,
+                    self.center_x - radius + 1,
+                    self.center_x + radius,
+                    1,
+                    false,
+                ),
+                _ => unreachable!(),
+            };
+            let fixed_max = if fixed_x { x_max } else { z_max };
+            if !(0..=fixed_max).contains(&fixed) {
+                continue;
+            }
+            let variable_max = if fixed_x { z_max } else { x_max };
+            let start = if step > 0 {
+                start.max(0)
+            } else {
+                start.min(variable_max)
+            };
+            let end = if step > 0 {
+                end.min(variable_max)
+            } else {
+                end.max(0)
+            };
+            if (step > 0 && start > end) || (step < 0 && start < end) {
+                continue;
+            }
+            let edge_len = (end - start).unsigned_abs() + 1;
+            if offset < edge_len {
+                let position = start + step * offset as i64;
+                let tile = if fixed_x {
+                    (fixed, position)
+                } else {
+                    (position, fixed)
+                };
+                return (tile.0 as u64, tile.1 as u64);
+            }
+            offset -= edge_len;
+        }
+        unreachable!("spiral ring offset must map to a clipped edge")
+    }
 }
+
+impl Iterator for WorkItems<'_, '_> {
+    type Item = WorkItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.plan.work_item(self.next)?;
+        self.next += 1;
+        Some(item)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.plan.total_items - self.next;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for WorkItems<'_, '_> {}
 
 #[cfg(test)]
 mod tests {
@@ -213,18 +346,39 @@ mod tests {
         let mut config = config();
         config.scan_order = ScanOrder::Spiral;
         let spiral = make_plan(&config, config.gpu_tile_size).unwrap();
-        assert_eq!(spiral.items.len(), 50);
-        assert_eq!((spiral.items[0].start.x, spiral.items[0].start.z), (0, 0));
-        let visited: HashSet<_> = spiral
-            .items
+        assert_eq!(spiral.total_items(), 50);
+        let spiral_items: Vec<_> = spiral.iter().collect();
+        assert_eq!((spiral_items[0].start.x, spiral_items[0].start.z), (0, 0));
+        let first_ring: Vec<_> = spiral_items
+            .iter()
+            .step_by(config.directions.len())
+            .take(9)
+            .map(|item| (item.start.x, item.start.z))
+            .collect();
+        assert_eq!(
+            first_ring,
+            [
+                (0, 0),
+                (1, 0),
+                (1, 1),
+                (0, 1),
+                (-1, 1),
+                (-1, 0),
+                (-1, -1),
+                (0, -1),
+                (1, -1),
+            ]
+        );
+        let visited: HashSet<_> = spiral_items
             .iter()
             .map(|item| (item.start.x, item.start.z, item.direction))
             .collect();
-        assert_eq!(visited.len(), spiral.items.len());
+        assert_eq!(visited.len(), spiral_items.len());
 
         config.scan_order = ScanOrder::Linear;
         let linear = make_plan(&config, config.gpu_tile_size).unwrap();
-        assert_eq!((linear.items[0].start.x, linear.items[0].start.z), (-2, -2));
+        let first = linear.work_item(0).unwrap();
+        assert_eq!((first.start.x, first.start.z), (-2, -2));
     }
 
     #[test]
@@ -235,12 +389,74 @@ mod tests {
         config.x_range = IntRange { start: 0, end: 10 };
         config.z_range = IntRange { start: -1, end: 1 };
         let plan = make_plan(&config, TileSize { x: 3, z: 1 }).unwrap();
-        let visited: HashSet<_> = plan
-            .items
+        assert_eq!(plan.total_items(), 8);
+        let items: Vec<_> = plan.iter().collect();
+        let visited: HashSet<_> = items
             .iter()
             .map(|item| (item.start.x, item.start.z))
             .collect();
-        assert_eq!(plan.items.len(), 8);
         assert_eq!(visited.len(), 8);
+    }
+
+    #[test]
+    fn indexed_spiral_matches_reference_for_rectangles() {
+        fn reference(x_tiles: i64, z_tiles: i64) -> Vec<(i32, i32)> {
+            let center_x = (x_tiles - 1) / 2;
+            let center_z = (z_tiles - 1) / 2;
+            let max_radius = [
+                center_x,
+                center_z,
+                x_tiles - 1 - center_x,
+                z_tiles - 1 - center_z,
+            ]
+            .into_iter()
+            .max()
+            .unwrap();
+            let mut tiles = Vec::new();
+            let mut emit = |x: i64, z: i64| {
+                if x >= 0 && z >= 0 && x < x_tiles && z < z_tiles {
+                    tiles.push((x as i32, z as i32));
+                }
+            };
+
+            emit(center_x, center_z);
+            for radius in 1..=max_radius {
+                for z in center_z - radius + 1..=center_z + radius {
+                    emit(center_x + radius, z);
+                }
+                for x in (center_x - radius..=center_x + radius - 1).rev() {
+                    emit(x, center_z + radius);
+                }
+                for z in (center_z - radius..=center_z + radius - 1).rev() {
+                    emit(center_x - radius, z);
+                }
+                for x in center_x - radius + 1..=center_x + radius {
+                    emit(x, center_z - radius);
+                }
+            }
+            tiles
+        }
+
+        let mut config = config();
+        config.directions = vec![0];
+        config.scan_order = ScanOrder::Spiral;
+        for x_tiles in 1..=9 {
+            for z_tiles in 1..=9 {
+                config.x_range = IntRange {
+                    start: 0,
+                    end: x_tiles,
+                };
+                config.z_range = IntRange {
+                    start: 0,
+                    end: z_tiles,
+                };
+                let plan = make_plan(&config, TileSize { x: 1, z: 1 }).unwrap();
+                let actual: Vec<_> = plan
+                    .iter()
+                    .map(|item| (item.start.x, item.start.z))
+                    .collect();
+                assert_eq!(actual, reference(x_tiles.into(), z_tiles.into()));
+            }
+        }
     }
 }

@@ -109,7 +109,7 @@ impl Reporter {
     }
 }
 
-fn print_plan(label: &str, plan: &ScanPlan, stdout: bool) {
+fn print_plan(label: &str, plan: &ScanPlan<'_>, stdout: bool) {
     let candidates = if plan.total_candidates_saturated {
         format!(">= {} (display saturated)", plan.total_candidates)
     } else {
@@ -117,7 +117,7 @@ fn print_plan(label: &str, plan: &ScanPlan, stdout: bool) {
     };
     let summary = format!(
         "{label} plan: {} work items; candidates: {candidates}.",
-        plan.items.len()
+        plan.total_items()
     );
     if stdout {
         println!("{summary}");
@@ -210,7 +210,7 @@ fn run(options: Options) -> Result<ExitCode, String> {
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
         .map_err(|error| format!("could not install interrupt handler: {error}"))?;
 
-    let reporter = Reporter::new(plan.items.len(), config.verbose);
+    let reporter = Reporter::new(plan.total_items(), config.verbose);
     match scanner {
         Scanner::Cpu(scanner) => scanner.scan(
             &config,

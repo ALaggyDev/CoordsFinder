@@ -39,7 +39,7 @@ impl CpuScanner {
     pub fn scan(
         &self,
         config: &ScanConfig,
-        plan: &ScanPlan,
+        plan: &ScanPlan<'_>,
         sink: impl FnMut(&[Match]) + Send,
         progress: impl FnMut(u64, usize) + Send,
         cancelled: impl Fn() -> bool + Sync,
@@ -67,7 +67,7 @@ impl CpuScanner {
     fn run_mode<A: TextureSampler>(
         &self,
         config: &ScanConfig,
-        plan: &ScanPlan,
+        plan: &ScanPlan<'_>,
         sink: impl FnMut(&[Match]) + Send,
         progress: impl FnMut(u64, usize) + Send,
         cancelled: impl Fn() -> bool + Sync,
@@ -85,23 +85,21 @@ impl CpuScanner {
         // batches from different workers never interleave on stdout.
         let sink = Mutex::new(sink);
         let progress = Mutex::new(progress);
-        let worker_count = cmp::min(self.threads, plan.items.len());
+        let worker_count = cmp::min(self.threads, plan.total_items());
 
         thread::scope(|scope| {
             for _ in 0..worker_count {
                 scope.spawn(|| {
                     let mut matches = Vec::with_capacity(RESULT_BATCH_SIZE);
                     while !cancelled() {
-                        // An atomic cursor dynamically balances uneven tiles while
-                        // preserving the plan's linear or spiral priority.
-                        let index = next_item.fetch_add(1, Ordering::Relaxed);
-                        let Some(item) = plan.items.get(index) else {
+                        let work_num = next_item.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = plan.work_item(work_num) else {
                             break;
                         };
 
                         scan_item::<A>(
                             config,
-                            item,
+                            &item,
                             &filters[item.direction_index],
                             &cancelled,
                             &mut matches,
@@ -113,7 +111,7 @@ impl CpuScanner {
                         if cancelled() {
                             break;
                         }
-                        let item_candidates = candidate_count(item).0;
+                        let item_candidates = candidate_count(&item).0;
                         let total = candidates
                             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                                 Some(current.saturating_add(item_candidates))

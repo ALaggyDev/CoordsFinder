@@ -235,7 +235,7 @@ impl GpuScanner {
     pub fn scan(
         &self,
         config: &ScanConfig,
-        plan: &ScanPlan,
+        plan: &ScanPlan<'_>,
         mut sink: impl FnMut(&[Match]),
         mut progress: impl FnMut(u64, usize),
         cancelled: impl Fn() -> bool,
@@ -255,7 +255,7 @@ impl GpuScanner {
             .collect();
 
         let mut candidates = 0_u64;
-        for (index, item) in plan.items.iter().enumerate() {
+        for (index, item) in plan.iter().enumerate() {
             if cancelled() {
                 break;
             }
@@ -327,7 +327,7 @@ impl GpuScanner {
                     .collect();
                 sink(&matches);
             }
-            candidates = candidates.saturating_add(candidate_count(item).0);
+            candidates = candidates.saturating_add(candidate_count(&item).0);
             progress(candidates, index + 1);
         }
         Ok(())
