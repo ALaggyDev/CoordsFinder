@@ -40,12 +40,17 @@ override Y_SPAN: u32 = 1u;
 
 fn coordinate_random_raw(x: i32, y: i32, z: i32) -> i64 {
     let seed = i64(x * 3129871i) ^ i64(z) * 116129781li ^ i64(y);
-    return seed * seed * 42317861li + seed * 11li;
+    return seed * (seed * 42317861li + 11li);
+}
+
+fn coordinate_random_legacy(x: i32, y: i32, z: i32) -> i32 {
+    let seed = x * 3129871i ^ z * 116129781i ^ y;
+    return seed * (seed * 42317861i + 11i);
 }
 
 fn absolute_modulo(value: i32) -> u32 {
     let magnitude = select(value, 0i - value, value < 0i);
-    return u32(magnitude) % 4u;
+    return u32(magnitude) & 3u;
 }
 
 fn stafford_mix13(input: u64) -> u64 {
@@ -91,12 +96,10 @@ fn random_sodium2(seed_input: u64) -> i32 {
 }
 
 fn texture_variant(x: i32, y: i32, z: i32) -> u32 {
-    let raw = coordinate_random_raw(x, y, z);
-    // Keep this mapping synchronized with TextureAlgorithm's repr in Rust.
     if TEXTURE_ALGORITHM == 0u {
-        return absolute_modulo(i32(raw) >> 16u);
+        return absolute_modulo(coordinate_random_legacy(x, y, z) >> 16u);
     }
-    let seed = raw >> 16u;
+    let seed = coordinate_random_raw(x, y, z) >> 16u;
     if TEXTURE_ALGORITHM == 1u {
         return absolute_modulo(random_vanilla2(seed));
     }
