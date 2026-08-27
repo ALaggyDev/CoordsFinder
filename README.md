@@ -172,16 +172,19 @@ The first three numbers are the relative block coordinates to an origin. The fou
 ## Speed
 
 Benchmark setup:
+- Benchmark config: [`benchmark.conf`](./examples/benchmark.conf)
 - Search area: -225000 to 225000 in X/Z, -60 to 0 in Y (Donut SMP area)
+- Error tolerance: 0
 - CPU: AMD Ryzen AI 9 365 (10 cores, 20 threads)
 - GPU: NVIDIA RTX 5080 Laptop
 - OS: Windows 11, on MSVC
-- Error tolerance: 0
 
-|                     | CPU (1 thread)  | CPU (20 threads) | GPU (CUDA)      |
+EDIT: Several performance improvements were made, benchmark results are now updated!
+
+|                     | CPU (1 thread)  | CPU (20 threads) | GPU (Vulkan)    |
 | ------------------- | --------------- | ---------------- | --------------- |
-| Peak position/sec   | 168M            | 1,860M           | **103,000M!**      |
-| Estimated time      | 20 hours 5 mins | 1 hours 48 mins  | **2 mins 5 secs!** |
+| Peak position/sec   | 188M            | 2,180M           | **155,000M!**      |
+| Estimated time      | 17 hours 57 mins | 1 hours 33 mins  | **1 mins 18 secs!** |
 
 ## FAQs
 
