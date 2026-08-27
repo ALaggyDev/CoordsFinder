@@ -96,6 +96,7 @@ fn random_sodium2(seed_input: u64) -> i32 {
 }
 
 fn texture_variant(x: i32, y: i32, z: i32) -> u32 {
+    // Keep this mapping synchronized with TextureAlgorithm's repr in Rust.
     if TEXTURE_ALGORITHM == 0u {
         return absolute_modulo(coordinate_random_legacy(x, y, z) >> 16u);
     }
