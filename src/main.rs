@@ -1,5 +1,6 @@
 //! Command-line entry point and backend selection for CoordsFinder.
 
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -49,6 +50,10 @@ struct Options {
     #[arg(short = 'e', long)]
     validate: bool,
 
+    /// Also append matches to this file.
+    #[arg(short, long, value_name = "FILE")]
+    output: Option<PathBuf>,
+
     /// Print version information.
     #[arg(short = 'v', long, action = clap::ArgAction::Version)]
     version: (),
@@ -68,18 +73,36 @@ struct Reporter {
     matches: AtomicU64,
     total_items: usize,
     verbose: bool,
+    output: Option<Mutex<File>>,
 }
 
 impl Reporter {
-    fn new(total_items: usize, verbose: bool) -> Self {
+    fn new(
+        total_items: usize,
+        verbose: bool,
+        output_path: Option<&PathBuf>,
+    ) -> Result<Self, String> {
         let started = Instant::now();
-        Self {
+        let output = output_path
+            .map(|path| {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map(Mutex::new)
+                    .map_err(|error| {
+                        format!("could not open output file {}: {error}", path.display())
+                    })
+            })
+            .transpose()?;
+        Ok(Self {
             started,
             last_progress: Mutex::new(started),
             matches: AtomicU64::new(0),
             total_items,
             verbose,
-        }
+            output,
+        })
     }
 
     fn report_matches(&self, matches: &[coordsfinder::types::Match]) {
@@ -95,6 +118,18 @@ impl Reporter {
             )
             .expect("could not write match to stdout");
             stdout.flush().expect("could not flush match to stdout");
+            if let Some(output) = &self.output {
+                let mut output = output.lock().unwrap();
+                writeln!(
+                    output,
+                    "Found with {} mismatch(es)! ({}, {}, {}), direction {}",
+                    found.mismatches, found.x, found.y, found.z, found.direction
+                )
+                .expect("could not write match to output file");
+                output
+                    .flush()
+                    .expect("could not flush match to output file");
+            }
         }
     }
 
@@ -189,6 +224,12 @@ fn run(options: Options) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if options.output.is_none() {
+        eprintln!(
+            "Warning: no --output file was specified; matches will only be written to stdout."
+        );
+    }
+
     let scanner = select_scanner(&options, &config)?;
     let tile_size = match &scanner {
         Scanner::Cpu(scanner) => {
@@ -216,7 +257,7 @@ fn run(options: Options) -> Result<ExitCode, String> {
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
         .map_err(|error| format!("could not install interrupt handler: {error}"))?;
 
-    let reporter = Reporter::new(plan.total_items(), config.verbose);
+    let reporter = Reporter::new(plan.total_items(), config.verbose, options.output.as_ref())?;
     match scanner {
         Scanner::Cpu(scanner) => scanner.scan(
             &config,
@@ -268,11 +309,14 @@ mod tests {
             "cpu",
             "--threads",
             "4",
+            "--output",
+            "matches.txt",
             "example.conf",
         ])
         .unwrap();
         assert_eq!(options.backend, Backend::Cpu);
         assert_eq!(options.threads.map(NonZeroUsize::get), Some(4));
+        assert_eq!(options.output, Some(PathBuf::from("matches.txt")));
         assert_eq!(options.config, PathBuf::from("example.conf"));
     }
 
