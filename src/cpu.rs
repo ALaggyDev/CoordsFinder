@@ -14,7 +14,9 @@ use crate::scan::{ScanPlan, WorkItem, candidate_count, directional_filter};
 use crate::texture::{Sodium1, Sodium2, TextureSampler, Vanilla1, Vanilla2, Vanilla3};
 use crate::types::{Match, RotationInfo, TextureAlgorithm};
 
-const RESULT_BATCH_SIZE: usize = 256;
+// Deliver each match immediately so piping to another process does not delay it
+// behind a worker-local result batch.
+const RESULT_BATCH_SIZE: usize = 1;
 
 /// A reusable CPU scanner with a fixed number of worker threads.
 pub struct CpuScanner {

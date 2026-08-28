@@ -1,5 +1,6 @@
 //! Command-line entry point and backend selection for CoordsFinder.
 
+use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -84,11 +85,16 @@ impl Reporter {
     fn report_matches(&self, matches: &[coordsfinder::types::Match]) {
         self.matches
             .fetch_add(matches.len() as u64, Ordering::Relaxed);
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
         for found in matches {
-            println!(
+            writeln!(
+                stdout,
                 "Found with {} mismatch(es)! ({}, {}, {}), direction {}",
                 found.mismatches, found.x, found.y, found.z, found.direction
-            );
+            )
+            .expect("could not write match to stdout");
+            stdout.flush().expect("could not flush match to stdout");
         }
     }
 
