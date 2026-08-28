@@ -9,7 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::types::{MAX_FILTER_COUNT, RotationInfo, TextureAlgorithm};
+use crate::filter::{prepare_filters, rotate_xz};
+use crate::types::{Face, RotationInfo, TextureAlgorithm};
 
 /// A half-open integer range used for one scan axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,25 +150,41 @@ fn parse_filter(value: &str) -> Result<RotationInfo, String> {
         .ok_or_else(|| "filter row is missing a variant".to_owned())?
         .parse::<u8>()
         .map_err(|_| "filter variant must be a non-negative integer".to_owned())?;
-    let side = match variant.next().map(str::to_ascii_lowercase).as_deref() {
-        None | Some("normal" | "false" | "0") => false,
-        Some("side" | "true" | "1") => true,
-        Some(marker) => return Err(format!("invalid side marker '{marker}'")),
-    };
+    let marker = variant.next().map(str::to_ascii_lowercase);
     if variant.next().is_some() {
         return Err("unexpected extra token in filter row".to_owned());
     }
+    let (side, netherrack_face) = match marker.as_deref() {
+        None | Some("normal" | "false" | "0") => (false, None),
+        Some("side" | "true" | "1") => (true, None),
+        Some("netherrack-up") => (false, Some(Face::Up)),
+        Some("netherrack-down") => (false, Some(Face::Down)),
+        Some("netherrack-north") => (false, Some(Face::North)),
+        Some("netherrack-south") => (false, Some(Face::South)),
+        Some("netherrack-east") => (false, Some(Face::East)),
+        Some("netherrack-west") => (false, Some(Face::West)),
+        Some(marker) => return Err(format!("invalid filter marker '{marker}'")),
+    };
     let maximum = if side { 1 } else { 3 };
     if rotation > maximum {
         return Err(format!("variant {rotation} exceeds maximum {maximum}"));
     }
-    Ok(RotationInfo::new(
-        coordinates[0],
-        coordinates[1],
-        coordinates[2],
-        rotation,
-        side,
-    ))
+    Ok(match netherrack_face {
+        Some(face) => RotationInfo::netherrack(
+            coordinates[0],
+            coordinates[1],
+            coordinates[2],
+            rotation,
+            face,
+        ),
+        None => RotationInfo::new(
+            coordinates[0],
+            coordinates[1],
+            coordinates[2],
+            rotation,
+            side,
+        ),
+    })
 }
 
 fn line_error(path: &Path, line: usize, message: impl std::fmt::Display) -> String {
@@ -296,10 +313,8 @@ fn validate(config: &ScanConfig) -> Result<(), String> {
     if config.error_tolerance < 0 {
         return Err("errorTolerance must be non-negative".to_owned());
     }
-    if config.filter.is_empty() || config.filter.len() > MAX_FILTER_COUNT {
-        return Err(format!(
-            "filter must contain between 1 and {MAX_FILTER_COUNT} rows"
-        ));
+    if config.filter.is_empty() {
+        return Err("filter must contain at least one row".to_owned());
     }
     for &direction in &config.directions {
         for filter in &config.filter {
@@ -311,16 +326,13 @@ fn validate(config: &ScanConfig) -> Result<(), String> {
             }
         }
     }
+    prepare_filters(
+        &config.filter,
+        config.algorithm,
+        &config.directions,
+        config.error_tolerance,
+    )?;
     Ok(())
-}
-
-pub(crate) fn rotate_xz(x: i32, z: i32, direction: i32) -> (i32, i32) {
-    match direction / 90 {
-        1 => (-z, x),
-        2 => (-x, -z),
-        3 => (z, -x),
-        _ => (x, z),
-    }
 }
 
 #[cfg(test)]
@@ -335,6 +347,14 @@ mod tests {
         assert_eq!(config.gpu_tile_size, TileSize { x: 70, z: 90 });
         assert_eq!(config.error_tolerance, 2);
         assert_eq!(config.scan_order, ScanOrder::Spiral);
+    }
+
+    #[test]
+    fn parses_netherrack_face_markers() {
+        let parsed = parse_filter("1 -2 3 | 3 netherrack-west").unwrap();
+        assert_eq!(parsed, RotationInfo::netherrack(1, -2, 3, 3, Face::West));
+        assert!(parse_filter("0 0 0 | 4 netherrack-up").is_err());
+        assert!(parse_filter("0 0 0 | 0 netherrack").is_err());
     }
 
     #[test]

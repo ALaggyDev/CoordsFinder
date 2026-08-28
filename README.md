@@ -85,18 +85,20 @@ xRange = (-5000, 5000)
 yRange = (-60, 0)
 zRange = (-5000, 5000)
 
-errorTolerance = 0                # Maximum number of texture rotation errors accepted
+errorTolerance = 0                # Maximum number of block errors accepted
 
 cpuTileSize = (1024, 1024)
 gpuTileSize = (16384, 16384)
 verbose = false
 
 [filter]
-# x y z | variant [side]
+# x y z | variant [side|netherrack-<face>]
 -6 0 0 | 3
 -5 0 0 | 3
 -6 0 -1 | 0 side
 -5 0 -1 | 1 side
+0 1 0 | 2 netherrack-up
+0 1 0 | 0 netherrack-north
 ```
 
 More examples can be found in the [`examples`](./examples) folder.
@@ -136,13 +138,15 @@ For example, if `directions = [0, 180]`, CoordsFinder scans the filter as-is and
 
 If the screenshot direction is unknown, it is recommended to use `directions = [0, 90, 180, 270]` or `directions = [0, 180]`.
 
+NOTE: The `directions` are applied differently depending on top/bottom, side or netherrrack faces. Normal users should not need to worry about this.
+
 ### Scan ranges
 
 The scan ranges define the candidate coordinate area. Range ends are exclusive.
 
 ### Error tolerance
 
-Error tolerance dictates the maximum number of non-matching texture rotations allowed per candidate.
+Error tolerance dictates the maximum number of non-matching block errors allowed per candidate. Multiple face filters at the same offset are combined and count as one block error.
 
 Note that error tolerance **severely impacts** performance. It is not recommended to use an error tolerance above 3.
 
@@ -165,9 +169,17 @@ Filter rows use one of these forms:
 ```text
 x y z | variant
 x y z | variant side
+x y z | variant netherrack-<face>
 ```
 
-The first three numbers are the relative block coordinates to an origin. The fourth number is the texture variant. The optional `side` keyword indicates that the filter is a side face.
+The first three numbers are the relative block coordinates to an origin. The fourth number is the visible texture rotation.
+
+Depending on the type of block faces, additional keywords need to be used:
+- For ordinary rotated blocks (e.g., grass block, dirt, stone, etc.), no additional keywords are needed.
+- For side faces on mirrored blocks (e.g., stone, deepslate), the `side` keyword are used to indicate that the filter is a side face.
+- For netherrack, the `netherrack-<face>` keyword is used to indicate the direction of the face. The `<face>` can be one of `up`, `down`, `north`, `south`, `east`, or `west`.
+
+Multiple filters on the same block offset are merged into one block constraint to improve performance.
 
 ## Speed
 
@@ -208,7 +220,7 @@ Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. 
 - Lily pad
 - Sea pickle?
 - Turtle egg?
-- Netherrack (NOTE: not supported yet, since it has 16 variants)
+- Netherrack
 
 Flower random offsets are not part of the texture rotation algorithm (block variant model) but are instead hard-coded into the game. I will be looking into it in the future.
 
