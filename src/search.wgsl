@@ -20,6 +20,8 @@ struct SearchParams {
     x_span: u32,
     z_span: u32,
     direction: u32,
+    forced_errors: u32,
+    filter_count: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: SearchParams;
@@ -34,7 +36,6 @@ const SODIUM_PHI: u64 = 0x9e3779b97f4a7c15lu;
 const RESULT_CAPACITY: u32 = 262144u;
 override TEXTURE_ALGORITHM: u32 = 0u;
 override ERROR_TOLERANCE: u32 = 0u;
-override FILTER_COUNT: u32 = 1u;
 override Y_START: i32 = 0i;
 override Y_SPAN: u32 = 1u;
 
@@ -48,9 +49,9 @@ fn coordinate_random_legacy(x: i32, y: i32, z: i32) -> i32 {
     return seed * (seed * 42317861i + 11i);
 }
 
-fn absolute_modulo(value: i32) -> u32 {
+fn absolute_modulo_16(value: i32) -> u32 {
     let magnitude = select(value, 0i - value, value < 0i);
-    return u32(magnitude) & 3u;
+    return u32(magnitude) & 15u;
 }
 
 fn stafford_mix13(input: u64) -> u64 {
@@ -64,11 +65,11 @@ fn random_vanilla2(seed_input: i64) -> i32 {
     return i32((seed * 0xbb20b4600a69lu + 0x40942de6balu) >> 16u);
 }
 
-fn random_vanilla3(seed_input: i64) -> u32 {
+fn random_vanilla3_16(seed_input: i64) -> u32 {
     var seed = (u64(seed_input) ^ JAVA_MULTIPLIER) & JAVA_MASK;
     seed = (seed * JAVA_MULTIPLIER + 11lu) & JAVA_MASK;
     let next = u32(seed >> 17u);
-    return u32((4lu * u64(next)) >> 31u);
+    return u32((16lu * u64(next)) >> 31u);
 }
 
 fn random_sodium1(seed_input: u64) -> i32 {
@@ -98,19 +99,19 @@ fn random_sodium2(seed_input: u64) -> i32 {
 fn texture_variant(x: i32, y: i32, z: i32) -> u32 {
     // Keep this mapping synchronized with TextureAlgorithm's repr in Rust.
     if TEXTURE_ALGORITHM == 0u {
-        return absolute_modulo(coordinate_random_legacy(x, y, z) >> 16u);
+        return absolute_modulo_16(coordinate_random_legacy(x, y, z) >> 16u);
     }
     let seed = coordinate_random_raw(x, y, z) >> 16u;
     if TEXTURE_ALGORITHM == 1u {
-        return absolute_modulo(random_vanilla2(seed));
+        return absolute_modulo_16(random_vanilla2(seed));
     }
     if TEXTURE_ALGORITHM == 2u {
-        return random_vanilla3(seed);
+        return random_vanilla3_16(seed);
     }
     if TEXTURE_ALGORITHM == 3u {
-        return absolute_modulo(random_sodium1(u64(seed)));
+        return absolute_modulo_16(random_sodium1(u64(seed)));
     }
-    return absolute_modulo(random_sodium2(u64(seed)));
+    return absolute_modulo_16(random_sodium2(u64(seed)));
 }
 
 @compute @workgroup_size(16, 1, 16)
@@ -127,16 +128,16 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     var y = Y_START + i32(y_base);
     let y_end = Y_START + i32(min(y_base + 32u, Y_SPAN));
     var filter_index = 0u;
-    var mismatches = 0u;
+    var mismatches = params.forced_errors;
     while y < y_end {
         let sample = filters[filter_index];
-        let properties = u32(sample.values.w);
+        let accepted_indices = u32(sample.values.w);
         let variant = texture_variant(
             x + sample.values.x,
             y + sample.values.y,
             z + sample.values.z,
         );
-        let mismatch = (variant & (properties >> 8u)) != (properties & 0xffu);
+        let mismatch = (accepted_indices & (1u << variant)) == 0u;
 
         if ERROR_TOLERANCE == 0u {
             // The exact-match path restarts immediately at the next Y candidate
@@ -146,10 +147,10 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
                 filter_index = 0u;
             } else {
                 filter_index++;
-                if filter_index == FILTER_COUNT {
+                if filter_index == params.filter_count {
                     let result_index = atomicAdd(&counters[0], 1u);
                     if result_index < RESULT_CAPACITY {
-                        results[result_index] = SearchResult(x, y, z, 0i, bitcast<i32>(params.direction));
+                        results[result_index] = SearchResult(x, y, z, i32(mismatches), bitcast<i32>(params.direction));
                     } else {
                         atomicStore(&counters[1], 1u);
                     }
@@ -166,8 +167,8 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
             if mismatches > ERROR_TOLERANCE {
                 y++;
                 filter_index = 0u;
-                mismatches = 0u;
-            } else if filter_index == FILTER_COUNT {
+                mismatches = params.forced_errors;
+            } else if filter_index == params.filter_count {
                 let result_index = atomicAdd(&counters[0], 1u);
                 if result_index < RESULT_CAPACITY {
                     results[result_index] = SearchResult(x, y, z, i32(mismatches), bitcast<i32>(params.direction));
@@ -176,7 +177,7 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
                 }
                 y++;
                 filter_index = 0u;
-                mismatches = 0u;
+                mismatches = params.forced_errors;
             }
         }
     }

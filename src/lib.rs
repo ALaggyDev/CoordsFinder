@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod cpu;
+pub mod filter;
 pub mod gpu;
 pub mod scan;
 pub mod texture;

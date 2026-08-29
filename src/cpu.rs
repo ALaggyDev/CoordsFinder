@@ -10,9 +10,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
 use crate::config::ScanConfig;
-use crate::scan::{ScanPlan, WorkItem, candidate_count, directional_filter};
+use crate::filter::prepare_filters;
+use crate::scan::{ScanPlan, WorkItem, candidate_count};
 use crate::texture::{Sodium1, Sodium2, TextureSampler, Vanilla1, Vanilla2, Vanilla3};
-use crate::types::{Match, RotationInfo, TextureAlgorithm};
+use crate::types::{CompiledRotation, Match, TextureAlgorithm};
 
 // Deliver each match immediately so piping to another process does not delay it
 // behind a worker-local result batch.
@@ -74,11 +75,12 @@ impl CpuScanner {
         progress: impl FnMut(u64, usize) + Send,
         cancelled: impl Fn() -> bool + Sync,
     ) -> Result<(), String> {
-        let filters: Vec<Vec<RotationInfo>> = config
-            .directions
-            .iter()
-            .map(|&direction| directional_filter(&config.filter, direction))
-            .collect();
+        let filters = prepare_filters(
+            &config.filter,
+            config.algorithm,
+            &config.directions,
+            config.error_tolerance,
+        )?;
         let next_item = AtomicUsize::new(0);
         let candidates = AtomicU64::new(0);
         let completed = AtomicUsize::new(0);
@@ -102,7 +104,8 @@ impl CpuScanner {
                         scan_item::<A>(
                             config,
                             &item,
-                            &filters[item.direction_index],
+                            &filters.directions[item.direction_index].constraints,
+                            filters.directions[item.direction_index].forced_errors,
                             &cancelled,
                             &mut matches,
                             &sink,
@@ -136,19 +139,20 @@ fn count_mismatches<A: TextureSampler>(
     x: i32,
     y: i32,
     z: i32,
-    filter: &[RotationInfo],
+    filter: &[CompiledRotation],
+    forced_errors: i32,
     tolerance: i32,
 ) -> i32 {
-    let mut mismatches = 0;
+    let mut mismatches = forced_errors;
     for sample in filter {
         // Minecraft performs these additions as wrapping Java int operations.
         let variant = A::sample(
             x.wrapping_add(i32::from(sample.x)),
             y.wrapping_add(i32::from(sample.y)),
             z.wrapping_add(i32::from(sample.z)),
-            4,
+            16,
         );
-        if variant & sample.visible_mask != sample.rotation {
+        if sample.accepted_indices & (1 << variant) == 0 {
             mismatches += 1;
             if mismatches > tolerance {
                 break;
@@ -161,18 +165,23 @@ fn count_mismatches<A: TextureSampler>(
 fn scan_item<A: TextureSampler>(
     config: &ScanConfig,
     item: &WorkItem,
-    filter: &[RotationInfo],
+    filter: &[CompiledRotation],
+    forced_errors: i32,
     cancelled: &impl Fn() -> bool,
     matches: &mut Vec<Match>,
     sink: &Mutex<impl FnMut(&[Match])>,
 ) {
+    if forced_errors > config.error_tolerance {
+        return;
+    }
     for x in item.start.x..item.end.x {
         for z in item.start.z..item.end.z {
             if cancelled() {
                 return;
             }
             for y in item.start.y..item.end.y {
-                let mismatches = count_mismatches::<A>(x, y, z, filter, config.error_tolerance);
+                let mismatches =
+                    count_mismatches::<A>(x, y, z, filter, forced_errors, config.error_tolerance);
                 if mismatches <= config.error_tolerance {
                     matches.push(Match {
                         x,
@@ -204,6 +213,7 @@ mod tests {
     use crate::config::{IntRange, ScanOrder, TileSize};
     use crate::scan::make_plan;
     use crate::texture::get_texture;
+    use crate::types::RotationInfo;
 
     #[test]
     fn matches_all_texture_algorithms() {
@@ -265,5 +275,73 @@ mod tests {
                 "{algorithm}"
             );
         }
+    }
+
+    #[test]
+    fn counts_conflicting_faces_once_per_block() {
+        let expected = get_texture(TextureAlgorithm::Vanilla3, 1, 0, 0, 4);
+        let config = ScanConfig {
+            algorithm: TextureAlgorithm::Vanilla3,
+            scan_order: ScanOrder::Linear,
+            directions: vec![0],
+            x_range: IntRange { start: 0, end: 1 },
+            y_range: IntRange { start: 0, end: 1 },
+            z_range: IntRange { start: 0, end: 1 },
+            error_tolerance: 1,
+            cpu_tile_size: TileSize { x: 1, z: 1 },
+            filter: vec![
+                RotationInfo::netherrack(0, 0, 0, 0, crate::types::Face::Up),
+                RotationInfo::netherrack(0, 0, 0, 1, crate::types::Face::Up),
+                RotationInfo::new(1, 0, 0, expected, false),
+            ],
+            ..ScanConfig::default()
+        };
+        let plan = make_plan(&config, config.cpu_tile_size).unwrap();
+        let mut found = Vec::new();
+        CpuScanner::new(1)
+            .unwrap()
+            .scan(
+                &config,
+                &plan,
+                |batch| found.extend_from_slice(batch),
+                |_, _| {},
+                || false,
+            )
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].mismatches, 1);
+    }
+
+    #[test]
+    fn skips_direction_ruled_out_by_combined_faces() {
+        let expected = get_texture(TextureAlgorithm::Vanilla1, 0, 0, 0, 4);
+        let config = ScanConfig {
+            algorithm: TextureAlgorithm::Vanilla1,
+            scan_order: ScanOrder::Linear,
+            directions: vec![0, 90],
+            x_range: IntRange { start: 0, end: 1 },
+            y_range: IntRange { start: 0, end: 1 },
+            z_range: IntRange { start: 0, end: 1 },
+            cpu_tile_size: TileSize { x: 1, z: 1 },
+            filter: vec![
+                RotationInfo::new(0, 0, 0, expected, false),
+                RotationInfo::new(0, 0, 0, expected & 1, true),
+            ],
+            ..ScanConfig::default()
+        };
+        let plan = make_plan(&config, config.cpu_tile_size).unwrap();
+        let mut found = Vec::new();
+        CpuScanner::new(1)
+            .unwrap()
+            .scan(
+                &config,
+                &plan,
+                |batch| found.extend_from_slice(batch),
+                |_, _| {},
+                || false,
+            )
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].direction, 0);
     }
 }

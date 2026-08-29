@@ -3,8 +3,8 @@
 //! Plans split the X/Z search area into half-open tiles. Each tile is repeated
 //! for every requested direction; CPU and GPU backends consume the same plan.
 
-use crate::config::{ScanConfig, ScanOrder, TileSize, rotate_xz};
-use crate::types::{Int3, RotationInfo};
+use crate::config::{ScanConfig, ScanOrder, TileSize};
+use crate::types::Int3;
 
 /// A half-open 3D tile paired with one structure direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,29 +43,6 @@ pub struct ScanPlan<'a> {
 pub struct WorkItems<'plan, 'config> {
     plan: &'plan ScanPlan<'config>,
     next: usize,
-}
-
-/// Rotates a filter into world orientation and prioritizes selective samples.
-///
-/// Four-way top/bottom faces rotate with the structure. Side faces retain
-/// their two-state variant because a quarter turn does not change that state.
-pub fn directional_filter(filter: &[RotationInfo], direction: i32) -> Vec<RotationInfo> {
-    let mut result: Vec<_> = filter
-        .iter()
-        .copied()
-        .map(|mut item| {
-            let (x, z) = rotate_xz(i32::from(item.x), i32::from(item.z), direction);
-            item.x = x as i8;
-            item.z = z as i8;
-            if item.visible_mask == 3 {
-                item.rotation = (item.rotation + (direction / 90) as u8) % 4;
-            }
-            item
-        })
-        .collect();
-    // Four-state samples reject random candidates more often, so test them first.
-    result.sort_by_key(|item| std::cmp::Reverse(item.visible_mask));
-    result
 }
 
 fn span(start: i32, end: i32) -> u64 {
@@ -310,7 +287,7 @@ impl ExactSizeIterator for WorkItems<'_, '_> {}
 mod tests {
     use super::*;
     use crate::config::{IntRange, ScanConfig};
-    use crate::types::TextureAlgorithm;
+    use crate::types::{RotationInfo, TextureAlgorithm};
     use std::collections::HashSet;
 
     fn config() -> ScanConfig {
@@ -325,20 +302,6 @@ mod tests {
             filter: vec![RotationInfo::new(0, 0, 0, 0, false)],
             ..ScanConfig::default()
         }
-    }
-
-    #[test]
-    fn rotates_and_orders_filters() {
-        let filter = [
-            RotationInfo::new(2, 3, -4, 1, false),
-            RotationInfo::new(-1, 0, 5, 1, true),
-        ];
-        let rotated = directional_filter(&filter, 90);
-        assert_eq!((rotated[0].x, rotated[0].z, rotated[0].rotation), (4, 2, 2));
-        assert_eq!(
-            (rotated[1].x, rotated[1].z, rotated[1].rotation),
-            (-5, -1, 1)
-        );
     }
 
     #[test]

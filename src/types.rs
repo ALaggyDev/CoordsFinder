@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-/// Maximum number of filter samples supported by the GPU uniform layout.
+/// Maximum number of compiled block constraints supported by the GPU layout.
 pub const MAX_FILTER_COUNT: usize = 256;
 
 /// Texture randomization implementation to reproduce during a search.
@@ -53,6 +53,43 @@ pub struct Int3 {
     pub z: i32,
 }
 
+/// One of Minecraft's six world-facing block faces.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(u8)]
+pub enum Face {
+    Up,
+    Down,
+    North,
+    South,
+    East,
+    West,
+}
+
+impl Face {
+    /// Rotates a horizontal face clockwise around Y in world coordinates.
+    pub fn rotate_y(self, quarter_turns: u8) -> Self {
+        let mut face = self;
+        for _ in 0..quarter_turns % 4 {
+            face = match face {
+                Self::North => Self::East,
+                Self::East => Self::South,
+                Self::South => Self::West,
+                Self::West => Self::North,
+                vertical => vertical,
+            };
+        }
+        face
+    }
+}
+
+/// How a configured texture observation is interpreted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RotationKind {
+    StandardFourWay,
+    StandardSide,
+    Netherrack(Face),
+}
+
 /// One texture observation at an offset from a candidate origin.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RotationInfo {
@@ -60,22 +97,46 @@ pub struct RotationInfo {
     pub y: i8,
     pub z: i8,
     pub rotation: u8,
-    /// `3` compares four variants; `1` folds side faces to two states.
-    pub visible_mask: u8,
+    pub kind: RotationKind,
 }
 
 impl RotationInfo {
     /// Creates a normalized observation for a four-state face or two-state side.
     pub fn new(x: i8, y: i8, z: i8, rotation: u8, side: bool) -> Self {
-        let visible_mask = if side { 1 } else { 3 };
+        let kind = if side {
+            RotationKind::StandardSide
+        } else {
+            RotationKind::StandardFourWay
+        };
         Self {
             x,
             y,
             z,
-            rotation: rotation % (visible_mask + 1),
-            visible_mask,
+            rotation: rotation % if side { 2 } else { 4 },
+            kind,
         }
     }
+
+    /// Creates a netherrack face observation.
+    pub fn netherrack(x: i8, y: i8, z: i8, rotation: u8, face: Face) -> Self {
+        Self {
+            x,
+            y,
+            z,
+            rotation: rotation % 4,
+            kind: RotationKind::Netherrack(face),
+        }
+    }
+}
+
+/// One preprocessed block constraint consumed by both scan backends.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompiledRotation {
+    pub x: i8,
+    pub y: i8,
+    pub z: i8,
+    /// Bit `i` is set when 16-way model index `i` satisfies this block.
+    pub accepted_indices: u16,
 }
 
 /// A candidate coordinate accepted by a scan backend.

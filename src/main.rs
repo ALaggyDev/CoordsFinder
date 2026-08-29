@@ -13,6 +13,7 @@ use clap::{Parser, ValueEnum};
 use coordsfinder::VERSION;
 use coordsfinder::config::{ScanOrder, load};
 use coordsfinder::cpu::CpuScanner;
+use coordsfinder::filter::prepare_filters;
 use coordsfinder::gpu::GpuScanner;
 use coordsfinder::scan::{ScanPlan, make_plan};
 
@@ -196,14 +197,24 @@ fn select_scanner(
 
 fn run(options: Options) -> Result<ExitCode, String> {
     let config = load(&options.config)?;
+    let prepared = prepare_filters(
+        &config.filter,
+        config.algorithm,
+        &config.directions,
+        config.error_tolerance,
+    )?;
+    if let Some(warning) = prepared.warning() {
+        eprintln!("Warning: {warning}");
+    }
     let order = match config.scan_order {
         ScanOrder::Linear => "linear",
         ScanOrder::Spiral => "spiral",
     };
     let loaded = format!(
-        "Loaded {} with {} filters and {} direction(s).",
+        "Loaded {} with {} filter(s), {} block constraint(s), and {} direction(s).",
         config.source_path.display(),
         config.filter.len(),
+        prepared.directions[0].constraints.len() + prepared.directions[0].forced_errors as usize,
         config.directions.len()
     );
     if options.validate {

@@ -10,8 +10,9 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::config::ScanConfig;
-use crate::scan::{ScanPlan, candidate_count, directional_filter};
-use crate::types::{Match, RotationInfo};
+use crate::filter::prepare_filters;
+use crate::scan::{ScanPlan, candidate_count};
+use crate::types::{CompiledRotation, Match};
 
 const RESULT_CAPACITY: u32 = 262_144;
 const WORKGROUP_XZ: u32 = 16;
@@ -21,38 +22,42 @@ const CANDIDATES_PER_THREAD_Y: u32 = 32;
 struct ShaderSpecialization {
     algorithm: crate::types::TextureAlgorithm,
     error_tolerance: i32,
-    filter_count: usize,
     y_start: i32,
     y_end: i32,
 }
 
-impl From<&ScanConfig> for ShaderSpecialization {
-    fn from(config: &ScanConfig) -> Self {
-        Self {
+impl ShaderSpecialization {
+    fn new(config: &ScanConfig) -> Result<Self, String> {
+        prepare_filters(
+            &config.filter,
+            config.algorithm,
+            &config.directions,
+            config.error_tolerance,
+        )?;
+        Ok(Self {
             algorithm: config.algorithm,
             error_tolerance: config.error_tolerance,
-            filter_count: config.filter.len(),
             y_start: config.y_range.start,
             y_end: config.y_range.end,
-        }
+        })
     }
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct GpuFilter {
-    // One 16-byte uniform record: xyz offsets, then rotation | visible_mask << 8.
+    // One 16-byte uniform record: xyz offsets, then the 16-way acceptance mask.
     values: [i32; 4],
 }
 
-impl From<RotationInfo> for GpuFilter {
-    fn from(value: RotationInfo) -> Self {
+impl From<CompiledRotation> for GpuFilter {
+    fn from(value: CompiledRotation) -> Self {
         Self {
             values: [
                 i32::from(value.x),
                 i32::from(value.y),
                 i32::from(value.z),
-                i32::from(value.rotation) | (i32::from(value.visible_mask) << 8),
+                i32::from(value.accepted_indices),
             ],
         }
     }
@@ -148,12 +153,11 @@ impl GpuScanner {
             immediate_size: 0,
         });
         // A process scans one config, so compile only the exact kernel it needs.
-        let specialization = ShaderSpecialization::from(config);
+        let specialization = ShaderSpecialization::new(config)?;
         let y_span = i64::from(specialization.y_end) - i64::from(specialization.y_start);
         let constants = [
             ("TEXTURE_ALGORITHM", specialization.algorithm as u32 as f64),
             ("ERROR_TOLERANCE", specialization.error_tolerance as f64),
-            ("FILTER_COUNT", specialization.filter_count as f64),
             ("Y_START", specialization.y_start as f64),
             ("Y_SPAN", y_span as f64),
         ];
@@ -173,7 +177,7 @@ impl GpuScanner {
 
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("search parameters"),
-            size: 5 * 4,
+            size: 7 * 4,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -240,15 +244,23 @@ impl GpuScanner {
         mut progress: impl FnMut(u64, usize),
         cancelled: impl Fn() -> bool,
     ) -> Result<(), String> {
-        if self.specialization != ShaderSpecialization::from(config) {
+        if self.specialization != ShaderSpecialization::new(config)? {
             return Err("GPU scanner was used with a different shader configuration".to_owned());
         }
-        let filters: Vec<Vec<GpuFilter>> = config
+        let prepared = prepare_filters(
+            &config.filter,
+            config.algorithm,
+            &config.directions,
+            config.error_tolerance,
+        )?;
+        let filters: Vec<Vec<GpuFilter>> = prepared
             .directions
             .iter()
-            .map(|&direction| {
-                directional_filter(&config.filter, direction)
-                    .into_iter()
+            .map(|direction| {
+                direction
+                    .constraints
+                    .iter()
+                    .copied()
                     .map(GpuFilter::from)
                     .collect()
             })
@@ -258,6 +270,12 @@ impl GpuScanner {
         for (index, item) in plan.iter().enumerate() {
             if cancelled() {
                 break;
+            }
+            let direction_filter = &prepared.directions[item.direction_index];
+            if direction_filter.forced_errors > config.error_tolerance {
+                candidates = candidates.saturating_add(candidate_count(&item).0);
+                progress(candidates, index + 1);
+                continue;
             }
             let x_span = (i64::from(item.end.x) - i64::from(item.start.x)) as u32;
             let y_span = (i64::from(item.end.y) - i64::from(item.start.y)) as u32;
@@ -281,6 +299,8 @@ impl GpuScanner {
                 x_span,
                 z_span,
                 item.direction as u32,
+                direction_filter.forced_errors as u32,
+                direction_filter.constraints.len() as u32,
             ];
             self.queue
                 .write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
@@ -414,7 +434,7 @@ mod tests {
     use crate::config::{IntRange, ScanOrder, TileSize};
     use crate::scan::make_plan;
     use crate::texture::get_texture;
-    use crate::types::TextureAlgorithm;
+    use crate::types::{RotationInfo, TextureAlgorithm};
 
     #[test]
     fn search_shader_is_valid_wgsl() {
@@ -536,5 +556,41 @@ mod tests {
                 }
             }
         }
+
+        let coordinate = (-32..32)
+            .find(|&x| get_texture(TextureAlgorithm::Vanilla3, x, 0, 0, 16) == 5)
+            .unwrap();
+        let config = ScanConfig {
+            algorithm: TextureAlgorithm::Vanilla3,
+            scan_order: ScanOrder::Linear,
+            directions: vec![0],
+            x_range: IntRange {
+                start: coordinate,
+                end: coordinate + 1,
+            },
+            y_range: IntRange { start: 0, end: 1 },
+            z_range: IntRange { start: 0, end: 1 },
+            gpu_tile_size: TileSize { x: 1, z: 1 },
+            filter: vec![
+                RotationInfo::netherrack(0, 0, 0, 1, crate::types::Face::Up),
+                RotationInfo::netherrack(0, 0, 0, 3, crate::types::Face::North),
+                RotationInfo::netherrack(0, 0, 0, 2, crate::types::Face::East),
+            ],
+            ..ScanConfig::default()
+        };
+        let scanner = GpuScanner::new(&config).unwrap();
+        let plan = make_plan(&config, config.gpu_tile_size).unwrap();
+        let mut matches = Vec::new();
+        scanner
+            .scan(
+                &config,
+                &plan,
+                |batch| matches.extend_from_slice(batch),
+                |_, _| {},
+                || false,
+            )
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].x, coordinate);
     }
 }
