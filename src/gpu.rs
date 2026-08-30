@@ -334,7 +334,7 @@ impl GpuScanner {
             let counters: &[u32] = bytemuck::cast_slice(&counter_bytes);
             if counters[1] != 0 {
                 return Err(format!(
-                    "a GPU tile produced more than {RESULT_CAPACITY} matches; reduce gpuTileSize"
+                    "a GPU tile produced more than {RESULT_CAPACITY} matches; add more filters"
                 ));
             }
             if counters[0] > 0 {
