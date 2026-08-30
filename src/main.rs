@@ -141,10 +141,12 @@ impl Reporter {
             return;
         }
         let elapsed = self.started.elapsed().as_secs_f64();
+        let average_item_seconds = elapsed / completed.max(1) as f64;
         eprintln!(
-            "Progress: {completed}/{} work items, {:.3} M candidates/s, {} match(es).",
+            "Progress: {completed}/{} work items, {:.3} M candidates/s, {:.3} s/work item, {} match(es).",
             self.total_items,
             candidates as f64 / elapsed / 1_000_000.0,
+            average_item_seconds,
             self.matches.load(Ordering::Relaxed)
         );
         *last = now;

@@ -61,10 +61,7 @@ impl Default for ScanConfig {
             z_range: IntRange { start: 0, end: 0 },
             error_tolerance: 0,
             cpu_tile_size: TileSize { x: 1024, z: 1024 },
-            gpu_tile_size: TileSize {
-                x: 16_384,
-                z: 16_384,
-            },
+            gpu_tile_size: TileSize { x: 8192, z: 8192 },
             verbose: false,
             filter: Vec::new(),
             source_path: PathBuf::new(),
