@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
 use crate::config::ScanConfig;
+use crate::cpu_packed;
 use crate::filter::prepare_filters;
 use crate::scan::{ScanPlan, WorkItem, candidate_count};
 use crate::texture::{Sodium1, Sodium2, TextureSampler, Vanilla1, Vanilla2, Vanilla3};
@@ -84,6 +85,13 @@ impl CpuScanner {
         let next_item = AtomicUsize::new(0);
         let candidates = AtomicU64::new(0);
         let completed = AtomicUsize::new(0);
+        let packed_filters = filters
+            .directions
+            .iter()
+            .map(|direction| {
+                cpu_packed::prepare(config, &direction.constraints, direction.forced_errors)
+            })
+            .collect::<Vec<_>>();
 
         // Callbacks are serialized so callers can use ordinary FnMut state and
         // batches from different workers never interleave on stdout.
@@ -101,15 +109,27 @@ impl CpuScanner {
                             break;
                         };
 
-                        scan_item::<A>(
-                            config,
-                            &item,
-                            &filters.directions[item.direction_index].constraints,
-                            filters.directions[item.direction_index].forced_errors,
-                            &cancelled,
-                            &mut matches,
-                            &sink,
-                        );
+                        let direction = &filters.directions[item.direction_index];
+                        if let Some(packed) = &packed_filters[item.direction_index] {
+                            cpu_packed::scan_item(
+                                &item,
+                                packed,
+                                &direction.constraints,
+                                &cancelled,
+                                &mut matches,
+                                &sink,
+                            );
+                        } else {
+                            scan_item::<A>(
+                                config,
+                                &item,
+                                &direction.constraints,
+                                direction.forced_errors,
+                                &cancelled,
+                                &mut matches,
+                                &sink,
+                            );
+                        }
                         flush(&mut matches, &sink);
 
                         // A cancelled partial tile is not counted as complete.
@@ -210,7 +230,7 @@ fn flush(matches: &mut Vec<Match>, sink: &Mutex<impl FnMut(&[Match])>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{IntRange, ScanOrder, TileSize};
+    use crate::config::{IntRange, ScanOrder, TileSize, load};
     use crate::scan::make_plan;
     use crate::texture::get_texture;
     use crate::types::RotationInfo;
@@ -343,5 +363,73 @@ mod tests {
             .unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].direction, 0);
+    }
+
+    #[test]
+    fn packed_path_matches_brute_force_for_sparse_and_dense_covers() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let original = load(root.join("examples/packed-cpu-benchmark.conf")).unwrap();
+
+        for observation_count in [6, original.filter.len()] {
+            let mut config = original.clone();
+            config.scan_order = ScanOrder::Linear;
+            config.x_range = IntRange {
+                start: -140,
+                end: -130,
+            };
+            config.y_range = IntRange {
+                start: -32,
+                end: -22,
+            };
+            config.z_range = IntRange {
+                start: -583,
+                end: -573,
+            };
+            config.cpu_tile_size = TileSize { x: 10, z: 10 };
+            config.filter.truncate(observation_count);
+
+            let filters = prepare_filters(
+                &config.filter,
+                config.algorithm,
+                &config.directions,
+                config.error_tolerance,
+            )
+            .unwrap();
+            let constraints = &filters.directions[0].constraints;
+            assert!(cpu_packed::prepare(&config, constraints, 0).is_some());
+
+            let plan = make_plan(&config, config.cpu_tile_size).unwrap();
+            let mut packed = Vec::new();
+            CpuScanner::new(1)
+                .unwrap()
+                .scan(
+                    &config,
+                    &plan,
+                    |batch| packed.extend_from_slice(batch),
+                    |_, _| {},
+                    || false,
+                )
+                .unwrap();
+
+            let mut brute = Vec::new();
+            for x in config.x_range.start..config.x_range.end {
+                for z in config.z_range.start..config.z_range.end {
+                    for y in config.y_range.start..config.y_range.end {
+                        if count_mismatches::<Vanilla3>(x, y, z, constraints, 0, 0) == 0 {
+                            brute.push(Match {
+                                x,
+                                y,
+                                z,
+                                mismatches: 0,
+                                direction: 0,
+                            });
+                        }
+                    }
+                }
+            }
+            packed.sort_by_key(|found| (found.x, found.y, found.z));
+            brute.sort_by_key(|found| (found.x, found.y, found.z));
+            assert_eq!(packed, brute, "observation_count={observation_count}");
+        }
     }
 }

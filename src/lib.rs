@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod cpu;
+mod cpu_packed;
 pub mod filter;
 pub mod gpu;
 pub mod scan;
