@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, ValueEnum};
 use coordsfinder::VERSION;
-use coordsfinder::config::{ScanOrder, load};
+use coordsfinder::config::{ScanOrder, load_with_search_mode};
 use coordsfinder::cpu::CpuScanner;
 use coordsfinder::filter::prepare_filters;
 use coordsfinder::gpu::GpuScanner;
+use coordsfinder::sample_plan::{build_sample_plan, select_sample_plan};
 use coordsfinder::scan::{ScanPlan, make_plan};
+use coordsfinder::types::SearchMode;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Backend {
@@ -46,6 +48,10 @@ struct Options {
     /// CPU worker count (defaults to the available hardware parallelism).
     #[arg(short, long)]
     threads: Option<NonZeroUsize>,
+
+    /// Exact-search implementation (overrides searchMode in the config).
+    #[arg(long, value_name = "auto|naive|sample-trie")]
+    search_mode: Option<SearchMode>,
 
     /// Validate and summarize the config without scanning.
     #[arg(short = 'e', long)]
@@ -198,7 +204,7 @@ fn select_scanner(
 }
 
 fn run(options: Options) -> Result<ExitCode, String> {
-    let config = load(&options.config)?;
+    let config = load_with_search_mode(&options.config, options.search_mode)?;
     let prepared = prepare_filters(
         &config.filter,
         config.algorithm,
@@ -221,10 +227,56 @@ fn run(options: Options) -> Result<ExitCode, String> {
     );
     if options.validate {
         println!("{loaded}");
-        println!("Algorithm: {}; order: {order}.", config.algorithm);
+        println!(
+            "Algorithm: {}; search: {}; order: {order}.",
+            config.algorithm, config.search_mode
+        );
     } else {
         eprintln!("{loaded}");
-        eprintln!("Algorithm: {}; order: {order}.", config.algorithm);
+        eprintln!(
+            "Algorithm: {}; search: {}; order: {order}.",
+            config.algorithm, config.search_mode
+        );
+    }
+
+    let mut search_descriptions = Vec::with_capacity(prepared.directions.len());
+    for direction in &prepared.directions {
+        let selected = select_sample_plan(
+            &direction.constraints,
+            config.algorithm,
+            direction.forced_errors,
+            config.error_tolerance,
+            config.search_mode,
+        )?;
+        let description = selected.as_ref().map_or_else(
+            || {
+                if config.search_mode == SearchMode::Auto
+                    && config.error_tolerance == 0
+                    && direction.forced_errors == 0
+                {
+                    build_sample_plan(&direction.constraints, config.algorithm).map_or_else(
+                        || "naive (no compact sample available)".to_owned(),
+                        |candidate| format!("naive (auto rejected: {})", candidate.description()),
+                    )
+                } else {
+                    "naive".to_owned()
+                }
+            },
+            |plan| plan.description(),
+        );
+        search_descriptions.push(description);
+    }
+
+    for (index, description) in search_descriptions.iter().enumerate() {
+        let summary = format!(
+            "Direction {} search: {description}.",
+            config.directions[index]
+        );
+        if options.validate {
+            println!("{summary}");
+        } else {
+            eprintln!("{summary}");
+        }
     }
 
     // Validation covers both tile configurations without requiring a GPU.
@@ -322,6 +374,8 @@ mod tests {
             "cpu",
             "--threads",
             "4",
+            "--search-mode",
+            "sample-trie",
             "--output",
             "matches.txt",
             "example.conf",
@@ -329,6 +383,7 @@ mod tests {
         .unwrap();
         assert_eq!(options.backend, Backend::Cpu);
         assert_eq!(options.threads.map(NonZeroUsize::get), Some(4));
+        assert_eq!(options.search_mode, Some(SearchMode::SampleTrie));
         assert_eq!(options.output, Some(PathBuf::from("matches.txt")));
         assert_eq!(options.config, PathBuf::from("example.conf"));
     }

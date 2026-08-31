@@ -46,6 +46,7 @@ CPU scanner        GPU scanner
 | `src/config.rs` | Config parsing and validation |
 | `src/types.rs` | Types shared by the parser, filter code, and scanners |
 | `src/filter.rs` | Direction rotation, 16-way masks, row combining, and forced errors |
+| `src/sample_plan.rs` | Compact sample-shape planning, placement boxes, and flat tries |
 | `src/texture.rs` | Minecraft and Sodium texture random functions |
 | `src/scan.rs` | Linear and spiral tile planning |
 | `src/cpu.rs` | Multithreaded CPU scanner |
@@ -318,6 +319,35 @@ stops when the error count exceeds the tolerance.
 The worker checks for Ctrl+C between X/Z columns. Output and progress callbacks
 use mutexes so messages from different workers do not overlap.
 
+## Compact-template trie search
+
+Exact scans can use the compact-template trie implemented in
+`src/sample_plan.rs`. The planner:
+
+1. finds canonical four-way constraints that can be represented by one trie
+   symbol;
+2. enumerates sample shapes of up to four offsets in a `2 x 2 x 2` cell;
+3. finds a solid rectangular box where the shape fits in the sparse filter;
+4. builds a four-child flat trie of the sample words in that box; and
+5. estimates whether sampling should beat the ordinary early-exit loop.
+
+The placement box's side lengths become a three-dimensional world lattice.
+Every candidate maps to exactly one placement in the box and therefore one
+lattice sample. A missing trie prefix rejects all of the candidates represented
+by that sample. A matching leaf gives their candidate origins, which are
+verified immediately against the remaining compiled filters.
+
+The CPU and GPU implementations do not store sampled world values or a list of
+surviving candidates. Only static trie/placement data and the ordinary result
+buffer are needed. `searchMode = auto` applies the planner's cost threshold,
+`naive` bypasses it, and `sample-trie` requires a plan for A/B tests. Nonzero
+error tolerance currently uses the naive scanner.
+
+Normal startup and `--validate` both print the planner variables for every
+direction: sample size and offsets, placement-box dimensions and volume, trie
+node/leaf/output counts, and modeled texture checks per candidate. Auto mode
+also prints a candidate plan when it rejects that plan in favor of naive.
+
 ## GPU scanner
 
 `gpu.rs` sets up wgpu and runs `search.wgsl`. It requires the
@@ -332,6 +362,12 @@ The host code:
 4. reads the result counters; and
 5. downloads match data only when the tile found matches.
 
+For a selected sample plan, the host instead dispatches lattice anchors over a
+small tile halo and uploads the sample offsets, flat trie, and leaf placements.
+`search_sample_trie` in `search.wgsl` traverses the trie and checks leaf
+survivors in the same invocation. Candidate bounds keep ownership with the
+original half-open tile even when adjacent tiles recompute halo anchors.
+
 One GPU filter record is 16 bytes:
 
 ```text
@@ -344,8 +380,10 @@ i32 containing the u16 mask
 Filter count and forced errors are sent with each tile because different
 directions can produce different prepared filters.
 
-The shader uses `16 x 1 x 16` workgroups. One shader invocation handles one X/Z
-coordinate and up to 32 Y coordinates.
+The naive shader uses `16 x 1 x 16` workgroups and handles up to 32 Y
+coordinates per invocation. The sample-trie shader uses genuinely
+three-dimensional `8 x 4 x 8` workgroups, with each invocation handling one
+independent lattice anchor rather than a serial Y batch.
 
 The result buffer holds 262,144 matches. If one tile finds more than that, the
 program asks the user to lower `gpuTileSize`.

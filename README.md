@@ -57,6 +57,7 @@ CLI options:
 ```text
 -b, --backend <auto|cpu|gpu>  Select the execution backend (default: auto)
 -t, --threads <N>             Set the CPU worker count
+    --search-mode <MODE>      Override auto, naive, or sample-trie search
 -e, --validate                Validate and summarize without scanning
 -o, --output <FILE>           Also append matches to FILE
 -h, --help                    Show all options
@@ -79,6 +80,7 @@ An example search config is included in [`example.conf`](./example.conf). It is 
 # Comments start with a hash. (#)
 
 algorithm = Vanilla-3             # Vanilla-1, Vanilla-2, Vanilla-3, Sodium-1, Sodium-2
+searchMode = auto                 # auto, naive, sample-trie
 scanOrder = spiral                # linear, spiral
 directions = [0]                  # 0, 90, 180, 270
 
@@ -119,6 +121,27 @@ Select the texture algorithm in the config. If unsure, use `Vanilla-3` as a safe
 | 1.0-4.1        | 1.16-1.18.2       | `Sodium-1`                    |
 | 4.2-4.8        | 1.19-1.19.3       | `Sodium-2`                    |
 | 4.9+           | 1.19.3+           | Use the matching Vanilla mode |
+
+### Search mode
+
+`searchMode` selects the exact-match loop used by both backends:
+
+- `auto` uses a compact-template trie when its static cost model predicts a
+  useful reduction, and otherwise keeps the candidate-at-a-time loop.
+- `naive` always uses the candidate-at-a-time loop.
+- `sample-trie` requires the compact-template trie. This is useful for A/B
+  benchmarks and reports an error when the filter is not eligible.
+
+The sample trie groups many candidate alignments behind one short world sample
+and verifies trie survivors immediately. It does not allocate a world-text or
+candidate buffer. The first implementation requires `errorTolerance = 0` and
+uses canonical four-way block constraints for its trie samples. Other exact
+constraints can still participate in the final verification. Searches with a
+nonzero error tolerance automatically use the naive loop.
+
+The command-line `--search-mode` option overrides the config value. With
+`--validate`, CoordsFinder prints the selected sample length, placement-box
+dimensions, and static estimated speedup for each direction.
 
 ### Scan order
 

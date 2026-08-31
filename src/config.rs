@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::filter::{prepare_filters, rotate_xz};
-use crate::types::{Face, RotationInfo, TextureAlgorithm};
+use crate::sample_plan::select_sample_plan;
+use crate::types::{Face, RotationInfo, SearchMode, TextureAlgorithm};
 
 /// A half-open integer range used for one scan axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +38,7 @@ pub enum ScanOrder {
 #[derive(Clone, Debug)]
 pub struct ScanConfig {
     pub algorithm: TextureAlgorithm,
+    pub search_mode: SearchMode,
     pub scan_order: ScanOrder,
     pub directions: Vec<i32>,
     pub x_range: IntRange,
@@ -54,6 +56,7 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             algorithm: TextureAlgorithm::Vanilla3,
+            search_mode: SearchMode::Auto,
             scan_order: ScanOrder::Linear,
             directions: vec![0],
             x_range: IntRange { start: 0, end: 0 },
@@ -190,6 +193,15 @@ fn line_error(path: &Path, line: usize, message: impl std::fmt::Display) -> Stri
 
 /// Loads, parses, and validates a scan configuration file.
 pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
+    load_with_search_mode(path, None)
+}
+
+/// Loads a config while applying a command-line search-mode override before
+/// validation.
+pub fn load_with_search_mode(
+    path: impl AsRef<Path>,
+    search_mode_override: Option<SearchMode>,
+) -> Result<ScanConfig, String> {
     let path = path.as_ref();
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
@@ -244,6 +256,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
             "algorithm" => {
                 TextureAlgorithm::from_str(value).map(|parsed| config.algorithm = parsed)
             }
+            "searchmode" => SearchMode::from_str(value).map(|parsed| config.search_mode = parsed),
             "scanorder" => match value.to_ascii_lowercase().as_str() {
                 "linear" | "native" => {
                     config.scan_order = ScanOrder::Linear;
@@ -289,11 +302,15 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
         }
     }
 
+    if let Some(search_mode) = search_mode_override {
+        config.search_mode = search_mode;
+    }
     validate(&config).map_err(|error| format!("{}: {error}", path.display()))?;
     Ok(config)
 }
 
-fn validate(config: &ScanConfig) -> Result<(), String> {
+/// Validates an already constructed or programmatically overridden config.
+pub fn validate(config: &ScanConfig) -> Result<(), String> {
     if config.x_range.start >= config.x_range.end
         || config.y_range.start >= config.y_range.end
         || config.z_range.start >= config.z_range.end
@@ -323,12 +340,25 @@ fn validate(config: &ScanConfig) -> Result<(), String> {
             }
         }
     }
-    prepare_filters(
+    let prepared = prepare_filters(
         &config.filter,
         config.algorithm,
         &config.directions,
         config.error_tolerance,
     )?;
+    if config.search_mode == SearchMode::SampleTrie {
+        for direction in &prepared.directions {
+            if direction.forced_errors <= config.error_tolerance {
+                select_sample_plan(
+                    &direction.constraints,
+                    config.algorithm,
+                    direction.forced_errors,
+                    config.error_tolerance,
+                    config.search_mode,
+                )?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -344,6 +374,11 @@ mod tests {
         assert_eq!(config.gpu_tile_size, TileSize { x: 70, z: 90 });
         assert_eq!(config.error_tolerance, 2);
         assert_eq!(config.scan_order, ScanOrder::Spiral);
+        assert_eq!(config.search_mode, SearchMode::Auto);
+        assert_eq!(
+            SearchMode::from_str("sample-trie").unwrap(),
+            SearchMode::SampleTrie
+        );
     }
 
     #[test]

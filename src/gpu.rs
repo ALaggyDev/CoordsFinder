@@ -11,12 +11,18 @@ use wgpu::util::DeviceExt;
 
 use crate::config::ScanConfig;
 use crate::filter::prepare_filters;
+use crate::sample_plan::{
+    MAX_SAMPLE_SIZE, SamplePlan, TriePlacement, anchor_grid, select_sample_plan,
+};
 use crate::scan::{ScanPlan, candidate_count};
-use crate::types::{CompiledRotation, Match};
+use crate::types::{CompiledRotation, MAX_FILTER_COUNT, Match};
 
 const RESULT_CAPACITY: u32 = 262_144;
 const WORKGROUP_XZ: u32 = 16;
-const CANDIDATES_PER_THREAD_Y: u32 = 32;
+const SAMPLE_WORKGROUP_XZ: u32 = 8;
+const SAMPLE_WORKGROUP_Y: u32 = 4;
+const NAIVE_CANDIDATES_PER_THREAD_Y: u32 = 32;
+const MAX_TRIE_NODES: usize = 1 + MAX_FILTER_COUNT * MAX_SAMPLE_SIZE;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct ShaderSpecialization {
@@ -48,6 +54,87 @@ impl ShaderSpecialization {
 struct GpuFilter {
     // One 16-byte uniform record: xyz offsets, then the 16-way acceptance mask.
     values: [i32; 4],
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct GpuTrieNode {
+    children: [u32; 4],
+    // Output start and count, followed by alignment padding.
+    metadata: [u32; 4],
+}
+
+impl From<crate::sample_plan::FlatTrieNode> for GpuTrieNode {
+    fn from(value: crate::sample_plan::FlatTrieNode) -> Self {
+        Self {
+            children: value.children,
+            metadata: [value.output_start, value.output_count, 0, 0],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct GpuTriePlacement {
+    // XYZ sample origin, then four packed u8 witness-filter indices.
+    values: [i32; 4],
+}
+
+impl From<TriePlacement> for GpuTriePlacement {
+    fn from(value: TriePlacement) -> Self {
+        let packed_witnesses = value
+            .witness_indices
+            .into_iter()
+            .enumerate()
+            .fold(0_u32, |packed, (index, witness)| {
+                packed | (u32::from(witness) << (index * 8))
+            });
+        Self {
+            values: [
+                value.origin.x,
+                value.origin.y,
+                value.origin.z,
+                packed_witnesses as i32,
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct GpuSampleParams {
+    anchor_start: [i32; 4],
+    anchor_steps: [u32; 4],
+    anchor_counts: [u32; 4],
+    tile_start: [i32; 4],
+    tile_end: [i32; 4],
+    sample_offsets: [[i32; 4]; MAX_SAMPLE_SIZE],
+    metadata: [u32; 4],
+}
+
+struct GpuSamplePlan {
+    plan: SamplePlan,
+    nodes: Vec<GpuTrieNode>,
+    placements: Vec<GpuTriePlacement>,
+}
+
+impl GpuSamplePlan {
+    fn new(plan: SamplePlan) -> Self {
+        debug_assert!(plan.nodes.len() <= MAX_TRIE_NODES);
+        debug_assert!(plan.placements.len() <= MAX_FILTER_COUNT);
+        let nodes = plan.nodes.iter().copied().map(GpuTrieNode::from).collect();
+        let placements = plan
+            .placements
+            .iter()
+            .copied()
+            .map(GpuTriePlacement::from)
+            .collect();
+        Self {
+            plan,
+            nodes,
+            placements,
+        }
+    }
 }
 
 impl From<CompiledRotation> for GpuFilter {
@@ -89,12 +176,16 @@ impl From<GpuResult> for Match {
 pub struct GpuScanner {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: Box<wgpu::ComputePipeline>,
+    naive_pipeline: Box<wgpu::ComputePipeline>,
+    sample_pipeline: Box<wgpu::ComputePipeline>,
     bind_group: wgpu::BindGroup,
     params: wgpu::Buffer,
     filters: wgpu::Buffer,
     results: wgpu::Buffer,
     counters: wgpu::Buffer,
+    sample_params: wgpu::Buffer,
+    trie_nodes: wgpu::Buffer,
+    trie_placements: wgpu::Buffer,
     specialization: ShaderSpecialization,
     adapter_name: String,
     adapter_backend: wgpu::Backend,
@@ -145,6 +236,9 @@ impl GpuScanner {
                 uniform_layout_entry(1),
                 storage_layout_entry(2, false),
                 storage_layout_entry(3, false),
+                uniform_layout_entry(4),
+                storage_layout_entry(5, true),
+                storage_layout_entry(6, true),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -161,8 +255,8 @@ impl GpuScanner {
             ("Y_START", specialization.y_start as f64),
             ("Y_SPAN", y_span as f64),
         ];
-        let pipeline = Box::new(
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let naive_pipeline = Box::new(device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
                 label: Some("CoordsFinder config-specialized search pipeline"),
                 layout: Some(&pipeline_layout),
                 module: &shader,
@@ -172,8 +266,21 @@ impl GpuScanner {
                     ..Default::default()
                 },
                 cache: None,
-            }),
-        );
+            },
+        ));
+        let sample_pipeline = Box::new(device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("CoordsFinder compact-template trie pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("search_sample_trie"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..Default::default()
+                },
+                cache: None,
+            },
+        ));
 
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("search parameters"),
@@ -196,6 +303,24 @@ impl GpuScanner {
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         });
+        let sample_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sample-trie parameters"),
+            size: size_of::<GpuSampleParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let trie_nodes = storage_buffer(
+            &device,
+            "sample-trie nodes",
+            (MAX_TRIE_NODES * size_of::<GpuTrieNode>()) as u64,
+            false,
+        );
+        let trie_placements = storage_buffer(
+            &device,
+            "sample-trie placements",
+            (MAX_FILTER_COUNT * size_of::<GpuTriePlacement>()) as u64,
+            false,
+        );
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("CoordsFinder search bindings"),
             layout: &bind_group_layout,
@@ -204,17 +329,24 @@ impl GpuScanner {
                 binding(1, &filters),
                 binding(2, &results),
                 binding(3, &counters),
+                binding(4, &sample_params),
+                binding(5, &trie_nodes),
+                binding(6, &trie_placements),
             ],
         });
         Ok(Self {
             device,
             queue,
-            pipeline,
+            naive_pipeline,
+            sample_pipeline,
             bind_group,
             params,
             filters,
             results,
             counters,
+            sample_params,
+            trie_nodes,
+            trie_placements,
             specialization,
             adapter_name: adapter_info.name,
             adapter_backend: adapter_info.backend,
@@ -265,6 +397,20 @@ impl GpuScanner {
                     .collect()
             })
             .collect();
+        let sample_plans = prepared
+            .directions
+            .iter()
+            .map(|direction| {
+                select_sample_plan(
+                    &direction.constraints,
+                    config.algorithm,
+                    direction.forced_errors,
+                    config.error_tolerance,
+                    config.search_mode,
+                )
+                .map(|plan| plan.map(GpuSamplePlan::new))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut candidates = 0_u64;
         for (index, item) in plan.iter().enumerate() {
@@ -280,11 +426,25 @@ impl GpuScanner {
             let x_span = (i64::from(item.end.x) - i64::from(item.start.x)) as u32;
             let y_span = (i64::from(item.end.y) - i64::from(item.start.y)) as u32;
             let z_span = (i64::from(item.end.z) - i64::from(item.start.z)) as u32;
-            let workgroups = [
-                x_span.div_ceil(WORKGROUP_XZ),
-                y_span.div_ceil(CANDIDATES_PER_THREAD_Y),
-                z_span.div_ceil(WORKGROUP_XZ),
-            ];
+            let sample_dispatch = sample_plans[item.direction_index]
+                .as_ref()
+                .and_then(|sample| anchor_grid(&sample.plan, &item).map(|grid| (sample, grid)));
+            let workgroups = sample_dispatch.as_ref().map_or_else(
+                || {
+                    [
+                        x_span.div_ceil(WORKGROUP_XZ),
+                        y_span.div_ceil(NAIVE_CANDIDATES_PER_THREAD_Y),
+                        z_span.div_ceil(WORKGROUP_XZ),
+                    ]
+                },
+                |(_, grid)| {
+                    [
+                        grid.counts[0].div_ceil(SAMPLE_WORKGROUP_XZ),
+                        grid.counts[1].div_ceil(SAMPLE_WORKGROUP_Y),
+                        grid.counts[2].div_ceil(SAMPLE_WORKGROUP_XZ),
+                    ]
+                },
+            );
             if workgroups
                 .iter()
                 .any(|&count| count > self.max_workgroups_per_dimension)
@@ -309,6 +469,18 @@ impl GpuScanner {
                 0,
                 bytemuck::cast_slice(&filters[item.direction_index]),
             );
+            if let Some((sample, grid)) = &sample_dispatch {
+                let sample_params = gpu_sample_params(sample, *grid, &item);
+                self.queue
+                    .write_buffer(&self.sample_params, 0, bytemuck::bytes_of(&sample_params));
+                self.queue
+                    .write_buffer(&self.trie_nodes, 0, bytemuck::cast_slice(&sample.nodes));
+                self.queue.write_buffer(
+                    &self.trie_placements,
+                    0,
+                    bytemuck::cast_slice(&sample.placements),
+                );
+            }
             self.queue
                 .write_buffer(&self.counters, 0, bytemuck::bytes_of(&[0_u32; 2]));
 
@@ -322,7 +494,11 @@ impl GpuScanner {
                     label: Some("CoordsFinder search pass"),
                     timestamp_writes: None,
                 });
-                pass.set_pipeline(&self.pipeline);
+                pass.set_pipeline(if sample_dispatch.is_some() {
+                    &self.sample_pipeline
+                } else {
+                    &self.naive_pipeline
+                });
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
             }
@@ -351,6 +527,26 @@ impl GpuScanner {
             progress(candidates, index + 1);
         }
         Ok(())
+    }
+}
+
+fn gpu_sample_params(
+    sample: &GpuSamplePlan,
+    grid: crate::sample_plan::AnchorGrid,
+    item: &crate::scan::WorkItem,
+) -> GpuSampleParams {
+    let mut sample_offsets = [[0_i32; 4]; MAX_SAMPLE_SIZE];
+    for (target, offset) in sample_offsets.iter_mut().zip(&sample.plan.offsets) {
+        *target = [offset.x, offset.y, offset.z, 0];
+    }
+    GpuSampleParams {
+        anchor_start: [grid.start.x, grid.start.y, grid.start.z, 0],
+        anchor_steps: [grid.steps[0], grid.steps[1], grid.steps[2], 0],
+        anchor_counts: [grid.counts[0], grid.counts[1], grid.counts[2], 0],
+        tile_start: [item.start.x, item.start.y, item.start.z, 0],
+        tile_end: [item.end.x, item.end.y, item.end.z, 0],
+        sample_offsets,
+        metadata: [sample.plan.sample_size() as u32, 0, 0, 0],
     }
 }
 
@@ -434,7 +630,7 @@ mod tests {
     use crate::config::{IntRange, ScanOrder, TileSize};
     use crate::scan::make_plan;
     use crate::texture::get_texture;
-    use crate::types::{RotationInfo, TextureAlgorithm};
+    use crate::types::{RotationInfo, SearchMode, TextureAlgorithm};
 
     #[test]
     fn search_shader_is_valid_wgsl() {
@@ -592,5 +788,64 @@ mod tests {
             .unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].x, coordinate);
+
+        for algorithm in [TextureAlgorithm::Vanilla1, TextureAlgorithm::Vanilla3] {
+            let target = (1_i32, 0_i32, -2_i32);
+            let mut filter = Vec::new();
+            for x in 0..4_i8 {
+                for z in 0..4_i8 {
+                    filter.push(RotationInfo::new(
+                        x,
+                        0,
+                        z,
+                        get_texture(
+                            algorithm,
+                            target.0 + i32::from(x),
+                            target.1,
+                            target.2 + i32::from(z),
+                            4,
+                        ),
+                        false,
+                    ));
+                }
+            }
+            let mut config = ScanConfig {
+                algorithm,
+                search_mode: SearchMode::SampleTrie,
+                scan_order: ScanOrder::Linear,
+                directions: vec![0],
+                x_range: IntRange { start: -4, end: 5 },
+                y_range: IntRange { start: -1, end: 2 },
+                z_range: IntRange { start: -5, end: 4 },
+                gpu_tile_size: TileSize { x: 5, z: 4 },
+                filter,
+                ..ScanConfig::default()
+            };
+            let scanner = GpuScanner::new(&config).unwrap();
+            let run = |config: &ScanConfig| {
+                let plan = make_plan(config, config.gpu_tile_size).unwrap();
+                let mut found = Vec::new();
+                scanner
+                    .scan(
+                        config,
+                        &plan,
+                        |batch| found.extend_from_slice(batch),
+                        |_, _| {},
+                        || false,
+                    )
+                    .unwrap();
+                found.sort_by_key(|item| (item.x, item.y, item.z, item.direction));
+                found
+            };
+            let sampled = run(&config);
+            config.search_mode = SearchMode::Naive;
+            let naive = run(&config);
+            assert_eq!(sampled, naive, "{algorithm}");
+            assert!(
+                sampled
+                    .iter()
+                    .any(|found| { (found.x, found.y, found.z) == (target.0, target.1, target.2) })
+            );
+        }
     }
 }

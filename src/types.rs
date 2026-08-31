@@ -6,6 +6,41 @@ use std::str::FromStr;
 /// Maximum number of compiled block constraints supported by the GPU layout.
 pub const MAX_FILTER_COUNT: usize = 256;
 
+/// Exact-search implementation selected for a scan.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SearchMode {
+    /// Use the sample trie when its static cost model predicts a useful gain.
+    #[default]
+    Auto,
+    /// Always use the existing candidate-at-a-time loop.
+    Naive,
+    /// Require the compact-template trie implementation.
+    SampleTrie,
+}
+
+impl fmt::Display for SearchMode {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        output.write_str(match self {
+            Self::Auto => "auto",
+            Self::Naive => "naive",
+            Self::SampleTrie => "sample-trie",
+        })
+    }
+}
+
+impl FromStr for SearchMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "naive" => Ok(Self::Naive),
+            "sample-trie" | "sampletrie" | "trie" => Ok(Self::SampleTrie),
+            _ => Err(format!("unknown search mode '{value}'")),
+        }
+    }
+}
+
 /// Texture randomization implementation to reproduce during a search.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]

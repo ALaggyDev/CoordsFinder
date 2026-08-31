@@ -11,6 +11,7 @@ use std::thread;
 
 use crate::config::ScanConfig;
 use crate::filter::prepare_filters;
+use crate::sample_plan::{SamplePlan, anchor_grid, select_sample_plan, visible_four_way_symbol};
 use crate::scan::{ScanPlan, WorkItem, candidate_count};
 use crate::texture::{Sodium1, Sodium2, TextureSampler, Vanilla1, Vanilla2, Vanilla3};
 use crate::types::{CompiledRotation, Match, TextureAlgorithm};
@@ -22,6 +23,13 @@ const RESULT_BATCH_SIZE: usize = 1;
 /// A reusable CPU scanner with a fixed number of worker threads.
 pub struct CpuScanner {
     threads: usize,
+}
+
+#[derive(Clone, Copy)]
+struct DirectionSearch<'a> {
+    filter: &'a [CompiledRotation],
+    forced_errors: i32,
+    sample_plan: Option<&'a SamplePlan>,
 }
 
 impl CpuScanner {
@@ -81,6 +89,19 @@ impl CpuScanner {
             &config.directions,
             config.error_tolerance,
         )?;
+        let sample_plans = filters
+            .directions
+            .iter()
+            .map(|direction| {
+                select_sample_plan(
+                    &direction.constraints,
+                    config.algorithm,
+                    direction.forced_errors,
+                    config.error_tolerance,
+                    config.search_mode,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let next_item = AtomicUsize::new(0);
         let candidates = AtomicU64::new(0);
         let completed = AtomicUsize::new(0);
@@ -101,11 +122,15 @@ impl CpuScanner {
                             break;
                         };
 
+                        let direction = &filters.directions[item.direction_index];
                         scan_item::<A>(
                             config,
                             &item,
-                            &filters.directions[item.direction_index].constraints,
-                            filters.directions[item.direction_index].forced_errors,
+                            DirectionSearch {
+                                filter: &direction.constraints,
+                                forced_errors: direction.forced_errors,
+                                sample_plan: sample_plans[item.direction_index].as_ref(),
+                            },
                             &cancelled,
                             &mut matches,
                             &sink,
@@ -165,15 +190,47 @@ fn count_mismatches<A: TextureSampler>(
 fn scan_item<A: TextureSampler>(
     config: &ScanConfig,
     item: &WorkItem,
+    direction: DirectionSearch<'_>,
+    cancelled: &impl Fn() -> bool,
+    matches: &mut Vec<Match>,
+    sink: &Mutex<impl FnMut(&[Match])>,
+) {
+    if direction.forced_errors > config.error_tolerance {
+        return;
+    }
+    if let Some(sample_plan) = direction.sample_plan {
+        if scan_item_sample::<A>(
+            config,
+            item,
+            direction.filter,
+            sample_plan,
+            cancelled,
+            matches,
+            sink,
+        ) {
+            return;
+        }
+    }
+    scan_item_naive::<A>(
+        config,
+        item,
+        direction.filter,
+        direction.forced_errors,
+        cancelled,
+        matches,
+        sink,
+    );
+}
+
+fn scan_item_naive<A: TextureSampler>(
+    config: &ScanConfig,
+    item: &WorkItem,
     filter: &[CompiledRotation],
     forced_errors: i32,
     cancelled: &impl Fn() -> bool,
     matches: &mut Vec<Match>,
     sink: &Mutex<impl FnMut(&[Match])>,
 ) {
-    if forced_errors > config.error_tolerance {
-        return;
-    }
     for x in item.start.x..item.end.x {
         for z in item.start.z..item.end.z {
             if cancelled() {
@@ -199,6 +256,117 @@ fn scan_item<A: TextureSampler>(
     }
 }
 
+/// Returns false only when an integer-boundary halo asks the caller to use the
+/// naive loop for this tile.
+fn scan_item_sample<A: TextureSampler>(
+    config: &ScanConfig,
+    item: &WorkItem,
+    filter: &[CompiledRotation],
+    plan: &SamplePlan,
+    cancelled: &impl Fn() -> bool,
+    matches: &mut Vec<Match>,
+    sink: &Mutex<impl FnMut(&[Match])>,
+) -> bool {
+    let Some(grid) = anchor_grid(plan, item) else {
+        return false;
+    };
+    for x_index in 0..grid.counts[0] {
+        let anchor_x =
+            (i64::from(grid.start.x) + i64::from(x_index) * i64::from(grid.steps[0])) as i32;
+        for z_index in 0..grid.counts[2] {
+            if cancelled() {
+                return true;
+            }
+            let anchor_z =
+                (i64::from(grid.start.z) + i64::from(z_index) * i64::from(grid.steps[2])) as i32;
+            for y_index in 0..grid.counts[1] {
+                let anchor_y = (i64::from(grid.start.y)
+                    + i64::from(y_index) * i64::from(grid.steps[1]))
+                    as i32;
+                let mut node_index = 0_usize;
+                let mut rejected = false;
+                for offset in &plan.offsets {
+                    let variant = A::sample(
+                        anchor_x.wrapping_add(offset.x),
+                        anchor_y.wrapping_add(offset.y),
+                        anchor_z.wrapping_add(offset.z),
+                        16,
+                    );
+                    let symbol = visible_four_way_symbol(config.algorithm, variant) as usize;
+                    let child = plan.nodes[node_index].children[symbol];
+                    if child == crate::sample_plan::MISSING_TRIE_CHILD {
+                        rejected = true;
+                        break;
+                    }
+                    node_index = child as usize;
+                }
+                if rejected {
+                    continue;
+                }
+
+                let leaf = plan.nodes[node_index];
+                let outputs = &plan.placements
+                    [leaf.output_start as usize..(leaf.output_start + leaf.output_count) as usize];
+                for placement in outputs {
+                    let candidate_x = i64::from(anchor_x) - i64::from(placement.origin.x);
+                    let candidate_y = i64::from(anchor_y) - i64::from(placement.origin.y);
+                    let candidate_z = i64::from(anchor_z) - i64::from(placement.origin.z);
+                    if candidate_x < i64::from(item.start.x)
+                        || candidate_x >= i64::from(item.end.x)
+                        || candidate_y < i64::from(item.start.y)
+                        || candidate_y >= i64::from(item.end.y)
+                        || candidate_z < i64::from(item.start.z)
+                        || candidate_z >= i64::from(item.end.z)
+                    {
+                        continue;
+                    }
+                    let candidate = (candidate_x as i32, candidate_y as i32, candidate_z as i32);
+                    if remaining_filter_matches::<A>(
+                        candidate,
+                        filter,
+                        &placement.witness_indices[..plan.sample_size()],
+                    ) {
+                        matches.push(Match {
+                            x: candidate.0,
+                            y: candidate.1,
+                            z: candidate.2,
+                            mismatches: 0,
+                            direction: item.direction,
+                        });
+                        if matches.len() == RESULT_BATCH_SIZE {
+                            flush(matches, sink);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+#[inline(always)]
+fn remaining_filter_matches<A: TextureSampler>(
+    candidate: (i32, i32, i32),
+    filter: &[CompiledRotation],
+    witness_indices: &[u8],
+) -> bool {
+    for (index, sample) in filter.iter().enumerate() {
+        if witness_indices.contains(&(index as u8)) {
+            continue;
+        }
+        let variant = A::sample(
+            candidate.0.wrapping_add(i32::from(sample.x)),
+            candidate.1.wrapping_add(i32::from(sample.y)),
+            candidate.2.wrapping_add(i32::from(sample.z)),
+            16,
+        );
+        if sample.accepted_indices & (1 << variant) == 0 {
+            return false;
+        }
+    }
+    true
+}
+
 fn flush(matches: &mut Vec<Match>, sink: &Mutex<impl FnMut(&[Match])>) {
     if matches.is_empty() {
         return;
@@ -213,7 +381,7 @@ mod tests {
     use crate::config::{IntRange, ScanOrder, TileSize};
     use crate::scan::make_plan;
     use crate::texture::get_texture;
-    use crate::types::RotationInfo;
+    use crate::types::{RotationInfo, SearchMode};
 
     #[test]
     fn matches_all_texture_algorithms() {
@@ -343,5 +511,75 @@ mod tests {
             .unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].direction, 0);
+    }
+
+    #[test]
+    fn sample_trie_matches_naive_search() {
+        let target = (1_i32, 0_i32, -2_i32);
+        for algorithm in [
+            TextureAlgorithm::Vanilla1,
+            TextureAlgorithm::Vanilla2,
+            TextureAlgorithm::Vanilla3,
+            TextureAlgorithm::Sodium1,
+            TextureAlgorithm::Sodium2,
+        ] {
+            let mut filter = Vec::new();
+            for x in 0..4_i8 {
+                for z in 0..4_i8 {
+                    filter.push(RotationInfo::new(
+                        x,
+                        0,
+                        z,
+                        get_texture(
+                            algorithm,
+                            target.0 + i32::from(x),
+                            target.1,
+                            target.2 + i32::from(z),
+                            4,
+                        ),
+                        false,
+                    ));
+                }
+            }
+            let base = ScanConfig {
+                algorithm,
+                scan_order: ScanOrder::Linear,
+                directions: vec![0, 90, 180, 270],
+                x_range: IntRange { start: -4, end: 5 },
+                y_range: IntRange { start: -1, end: 2 },
+                z_range: IntRange { start: -5, end: 4 },
+                cpu_tile_size: TileSize { x: 5, z: 4 },
+                filter,
+                ..ScanConfig::default()
+            };
+
+            let run = |mode| {
+                let mut config = base.clone();
+                config.search_mode = mode;
+                let plan = make_plan(&config, config.cpu_tile_size).unwrap();
+                let mut found = Vec::new();
+                CpuScanner::new(1)
+                    .unwrap()
+                    .scan(
+                        &config,
+                        &plan,
+                        |batch| found.extend_from_slice(batch),
+                        |_, _| {},
+                        || false,
+                    )
+                    .unwrap();
+                found.sort_by_key(|item| (item.x, item.y, item.z, item.direction));
+                found
+            };
+
+            let naive = run(SearchMode::Naive);
+            let sampled = run(SearchMode::SampleTrie);
+            assert_eq!(sampled, naive, "{algorithm}");
+            assert!(
+                sampled
+                    .iter()
+                    .any(|found| { (found.x, found.y, found.z) == (target.0, target.1, target.2) })
+            );
+        }
     }
 }
