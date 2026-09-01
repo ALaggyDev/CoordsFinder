@@ -45,8 +45,8 @@ struct PackedParams {
 @group(0) @binding(3) var<storage, read_write> results: array<SearchResult>;
 // counters[0] is the number of matches; counters[1] is the overflow flag.
 @group(0) @binding(4) var<storage, read_write> counters: array<atomic<u32>>;
-// buckets[candidate_z mod stride] stores (first filter, filter count). A vec4
-// is used because uniform arrays have a 16-byte element stride.
+// buckets[candidate_z mod stride] stores mask (start,count) in xy and exact
+// verifier (start,count) in zw. A vec4 matches the uniform array's 16-byte stride.
 @group(0) @binding(5) var<uniform> buckets: array<vec4<u32>, 256>;
 
 const JAVA_MULTIPLIER: u64 = 0x5deece66dlu;
@@ -205,7 +205,8 @@ fn filter_candidates(@builtin(global_invocation_id) id: vec3<u32>) {
         surviving_y &= surviving_y - 1lu;
         let y = PACKED_Y_MIN + i32(bit);
         var exact = true;
-        for (var filter_index = 0u; filter_index < params.filter_count; filter_index++) {
+        let verifier_end = bucket.z + bucket.w;
+        for (var filter_index = bucket.z; filter_index < verifier_end; filter_index++) {
             let observation = filters[filter_index].values;
             let accepted_indices = u32(observation.w) & 0xffffu;
             let variant = exact_variant(

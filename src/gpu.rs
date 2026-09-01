@@ -690,6 +690,30 @@ fn prepare_packed_direction(
     }
     debug_assert_eq!(filters.len(), constraints.len());
 
+    // Append a verifier list for each candidate residue containing only the
+    // observations omitted from that residue's mask pass. Rechecking the mask
+    // bucket would be exact but redundant: every surviving bit already passed
+    // those observations.
+    for candidate_residue in 0..dense_stride {
+        let start = filters.len() as u32;
+        filters.extend(
+            representable
+                .iter()
+                .copied()
+                .filter(|(constraint, _)| {
+                    (candidate_residue + i32::from(constraint.z)).rem_euclid(dense_stride)
+                        != source_z_residue
+                })
+                .map(|(constraint, visible)| GpuFilter::packed(constraint, visible)),
+        );
+        let bucket = &mut buckets[candidate_residue as usize];
+        bucket.values[2] = start;
+        bucket.values[3] = filters.len() as u32 - start;
+    }
+    if filters.len() > 256 {
+        return None;
+    }
+
     Some(PackedDirection {
         filters,
         buckets,
