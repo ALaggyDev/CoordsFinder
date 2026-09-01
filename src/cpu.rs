@@ -110,6 +110,9 @@ impl CpuScanner {
                         };
 
                         let direction = &filters.directions[item.direction_index];
+                        // Compatible Vanilla-3 jobs use one bit per possible Y
+                        // and reject whole X/Z columns with mask intersections.
+                        // Unsupported modes keep the original general scanner.
                         if let Some(packed) = &packed_filters[item.direction_index] {
                             cpu_packed::scan_item(
                                 &item,
