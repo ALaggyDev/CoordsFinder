@@ -197,10 +197,12 @@ fn filter_candidates(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // Exact verification is deliberately authoritative. Sparse masks may omit
     // constraints and leave false positives, but they can never report one.
-    for (var bit = 0u; bit < 61u; bit++) {
-        if (live & (1lu << bit)) == 0lu {
-            continue;
-        }
+    // Enumerate only set bits. Most columns return above with live==0; rare
+    // survivors now cost one iteration per surviving Y instead of 61 tests.
+    var surviving_y = live;
+    while surviving_y != 0lu {
+        let bit = firstTrailingBit(surviving_y);
+        surviving_y &= surviving_y - 1lu;
         let y = PACKED_Y_MIN + i32(bit);
         var exact = true;
         for (var filter_index = 0u; filter_index < params.filter_count; filter_index++) {
