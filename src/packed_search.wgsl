@@ -55,6 +55,34 @@ const MIX_MULTIPLIER: u64 = 42317861lu;
 const SECOND_DIFFERENCE: u64 = 84635722lu;
 const RESULT_CAPACITY: u32 = 262144u;
 const PACKED_Y_MIN: i32 = -60i;
+// The generic pipeline leaves this at zero and reads the stride from the
+// uniform. The benchmark pipeline sets it to four, allowing the compiler to
+// replace the per-observation divide and remainder with shifts and masks.
+override DENSE_STRIDE: u32 = 0u;
+
+fn packed_dense_stride() -> u32 {
+    if DENSE_STRIDE == 4u {
+        return 4u;
+    }
+    return params.dense_stride;
+}
+
+fn packed_source_row(source_z: i32) -> u32 {
+    let offset = u32(source_z - bitcast<i32>(params.source_z_start));
+    if DENSE_STRIDE == 4u {
+        return offset >> 2u;
+    }
+    return offset / params.dense_stride;
+}
+
+fn packed_candidate_residue(z: i32) -> u32 {
+    // A two's-complement low-bit mask is the Euclidean remainder for a
+    // power-of-two divisor, including negative coordinates.
+    if DENSE_STRIDE == 4u {
+        return bitcast<u32>(z) & 3u;
+    }
+    return u32(euclidean_remainder(z, i32(params.dense_stride)));
+}
 
 fn mixed_value(seed: u64) -> u64 {
     return seed * (seed * MIX_MULTIPLIER + 11lu);
@@ -97,14 +125,14 @@ fn append_result(x: i32, y: i32, z: i32) {
 
 // One invocation generates all source-Y rotations for one source (x,z).
 // X is the fastest-changing dispatch dimension and storage dimension.
-@compute @workgroup_size(256, 1, 1)
+@compute @workgroup_size(128, 1, 1)
 fn generate_source_signatures(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.source_width || id.y >= params.source_rows {
         return;
     }
 
     let x = bitcast<i32>(params.source_x_start) + i32(id.x);
-    let z = bitcast<i32>(params.source_z_start) + i32(id.y * params.dense_stride);
+    let z = bitcast<i32>(params.source_z_start) + i32(id.y * packed_dense_stride());
     let base = u64(i64(x * 3129871i)) ^ u64(i64(z) * 116129781li);
 
     // For source Y -64..-1, base XOR y contains each six-bit low value once.
@@ -149,7 +177,7 @@ fn generate_source_signatures(@builtin(global_invocation_id) id: vec3<u32>) {
 
 // One invocation owns one candidate (x,z) column. No other invocation reads
 // or writes its `live` value, so mask intersection needs no atomics.
-@compute @workgroup_size(256, 1, 1)
+@compute @workgroup_size(128, 1, 1)
 fn filter_candidates(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.candidate_width || id.y >= params.candidate_rows {
         return;
@@ -157,20 +185,18 @@ fn filter_candidates(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let x = bitcast<i32>(params.candidate_x_start) + i32(id.x);
     let z = bitcast<i32>(params.candidate_z_start) + i32(id.y);
-    let stride = i32(params.dense_stride);
     let plane_size = params.source_rows * params.source_width;
     var live = u64(params.initial_live_low) | (u64(params.initial_live_high) << 32u);
 
     // Rust partitions observations by the candidate-Z residue that makes
     // candidate_z + dz land on a selected source row. All invocations in this
     // candidate row therefore follow the same short, branch-free mask loop.
-    let bucket = buckets[u32(euclidean_remainder(z, stride))];
+    let bucket = buckets[packed_candidate_residue(z)];
     let bucket_end = bucket.x + bucket.y;
     for (var filter_index = bucket.x; filter_index < bucket_end; filter_index++) {
         let observation = filters[filter_index].values;
         let source_z = z + observation.z;
-        let source_row = u32(source_z - bitcast<i32>(params.source_z_start))
-            / params.dense_stride;
+        let source_row = packed_source_row(source_z);
         let source_x = id.x + u32(observation.x - bitcast<i32>(params.minimum_dx));
         let visible_rotations = u32(observation.w) >> 16u;
         let row_offset = source_row * params.source_width + source_x;

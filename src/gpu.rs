@@ -17,8 +17,11 @@ use crate::types::{CompiledRotation, Match, TextureAlgorithm};
 const RESULT_CAPACITY: u32 = 262_144;
 const WORKGROUP_XZ: u32 = 16;
 const CANDIDATES_PER_THREAD_Y: u32 = 32;
-const PACKED_WORKGROUP_X: u32 = 256;
-const PACKED_Z_BAND: i32 = 1024;
+const PACKED_WORKGROUP_X: u32 = 128;
+// At the benchmark's 8,192-column width this keeps the source-mask buffer at
+// roughly 96 MiB, below common 128 MiB storage-binding limits, while reducing
+// per-tile dispatches from eight to six.
+const PACKED_Z_BAND: i32 = 1536;
 const PACKED_Y_MIN: i32 = -60;
 const PACKED_Y_END: i32 = 1;
 const PACKED_MIN_MASKS_PER_ROW: usize = 5;
@@ -134,6 +137,8 @@ pub struct GpuScanner {
     bind_group: wgpu::BindGroup,
     packed_generate_pipeline: Box<wgpu::ComputePipeline>,
     packed_filter_pipeline: Box<wgpu::ComputePipeline>,
+    packed_generate_stride_four_pipeline: Box<wgpu::ComputePipeline>,
+    packed_filter_stride_four_pipeline: Box<wgpu::ComputePipeline>,
     packed_bind_group_layout: wgpu::BindGroupLayout,
     packed_params: wgpu::Buffer,
     packed_buckets: wgpu::Buffer,
@@ -263,6 +268,37 @@ impl GpuScanner {
                 cache: None,
             },
         ));
+        // The supplied GPU benchmark packs source rows at a stride of four.
+        // Specializing that fixed divisor removes integer division and signed
+        // remainder from its candidate hot path while the default pipelines
+        // remain available for every other stride.
+        let packed_stride_four_constants = [("DENSE_STRIDE", 4.0)];
+        let packed_generate_stride_four_pipeline = Box::new(device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("CoordsFinder packed-Y stride-four signature pipeline"),
+                layout: Some(&packed_pipeline_layout),
+                module: &packed_shader,
+                entry_point: Some("generate_source_signatures"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &packed_stride_four_constants,
+                    ..Default::default()
+                },
+                cache: None,
+            },
+        ));
+        let packed_filter_stride_four_pipeline = Box::new(device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("CoordsFinder packed-Y stride-four candidate pipeline"),
+                layout: Some(&packed_pipeline_layout),
+                module: &packed_shader,
+                entry_point: Some("filter_candidates"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &packed_stride_four_constants,
+                    ..Default::default()
+                },
+                cache: None,
+            },
+        ));
 
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("search parameters"),
@@ -314,6 +350,8 @@ impl GpuScanner {
             bind_group,
             packed_generate_pipeline,
             packed_filter_pipeline,
+            packed_generate_stride_four_pipeline,
+            packed_filter_stride_four_pipeline,
             packed_bind_group_layout,
             packed_params,
             packed_buckets,
@@ -586,7 +624,12 @@ impl GpuScanner {
                     label: Some("packed-Y source signature pass"),
                     timestamp_writes: None,
                 });
-                pass.set_pipeline(&self.packed_generate_pipeline);
+                let generate_pipeline = if packed.dense_stride == 4 {
+                    &self.packed_generate_stride_four_pipeline
+                } else {
+                    &self.packed_generate_pipeline
+                };
+                pass.set_pipeline(generate_pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(
                     signature_workgroups[0],
@@ -599,7 +642,12 @@ impl GpuScanner {
                     label: Some("packed-Y candidate filter pass"),
                     timestamp_writes: None,
                 });
-                pass.set_pipeline(&self.packed_filter_pipeline);
+                let filter_pipeline = if packed.dense_stride == 4 {
+                    &self.packed_filter_stride_four_pipeline
+                } else {
+                    &self.packed_filter_pipeline
+                };
+                pass.set_pipeline(filter_pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(
                     candidate_workgroups[0],
