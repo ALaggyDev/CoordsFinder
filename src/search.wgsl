@@ -68,8 +68,7 @@ fn random_vanilla2(seed_input: i64) -> i32 {
 fn random_vanilla3_16(seed_input: i64) -> u32 {
     var seed = (u64(seed_input) ^ JAVA_MULTIPLIER) & JAVA_MASK;
     seed = (seed * JAVA_MULTIPLIER + 11lu) & JAVA_MASK;
-    let next = u32(seed >> 17u);
-    return u32((16lu * u64(next)) >> 31u);
+    return u32(seed >> 44u);
 }
 
 fn random_sodium1(seed_input: u64) -> i32 {
