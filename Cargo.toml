@@ -1,6 +1,6 @@
 [package]
 name = "coordsfinder"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2024"
 rust-version = "1.87"
 license = "MIT"
@@ -12,3 +12,4 @@ clap = { version = "4.5", features = ["derive"] }
 ctrlc = "3.4"
 pollster = "0.4"
 wgpu = "30"
+lower = "0.2.1"

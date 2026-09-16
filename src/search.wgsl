@@ -39,14 +39,16 @@ override ERROR_TOLERANCE: u32 = 0u;
 override Y_START: i32 = 0i;
 override Y_SPAN: u32 = 1u;
 
-fn coordinate_random_raw(x: i32, y: i32, z: i32) -> i64 {
-    let seed = i64(x * 3129871i) ^ i64(z) * 116129781li ^ i64(y);
-    return seed * (seed * 42317861li + 11li);
+fn coord_seed_legacy(x: i32, y: i32, z: i32) -> i32 {
+    var seed = x * 3129871i ^ z * 116129781i ^ y;
+    seed = seed * (seed * 42317861i + 11i);
+    return seed >> 16u;
 }
 
-fn coordinate_random_legacy(x: i32, y: i32, z: i32) -> i32 {
-    let seed = x * 3129871i ^ z * 116129781i ^ y;
-    return seed * (seed * 42317861i + 11i);
+fn coord_seed(x: i32, y: i32, z: i32) -> i64 {
+    var seed = i64(x * 3129871i) ^ i64(z) * 116129781li ^ i64(y);
+    seed = seed * (seed * 42317861li + 11li);
+    return seed >> 16u;
 }
 
 fn absolute_modulo_16(value: i32) -> u32 {
@@ -60,18 +62,18 @@ fn stafford_mix13(input: u64) -> u64 {
     return value ^ (value >> 31u);
 }
 
-fn random_vanilla2(seed_input: i64) -> i32 {
+fn java_next_long(seed_input: i64) -> i32 {
     let seed = (u64(seed_input) ^ JAVA_MULTIPLIER) & JAVA_MASK;
     return i32((seed * 0xbb20b4600a69lu + 0x40942de6balu) >> 16u);
 }
 
-fn random_vanilla3_16(seed_input: i64) -> u32 {
+fn java_next_int_16(seed_input: i64) -> u32 {
     var seed = (u64(seed_input) ^ JAVA_MULTIPLIER) & JAVA_MASK;
     seed = (seed * JAVA_MULTIPLIER + 11lu) & JAVA_MASK;
     return u32(seed >> 44u);
 }
 
-fn random_sodium1(seed_input: u64) -> i32 {
+fn murmurhash3(seed_input: u64) -> i32 {
     var seed = seed_input;
     seed = seed ^ (seed >> 33u);
     seed = seed * 0xff51afd7ed558ccdlu;
@@ -83,34 +85,31 @@ fn random_sodium1(seed_input: u64) -> i32 {
     return i32(first + second);
 }
 
-fn rotate_left_17(value: u64) -> u64 {
-    return (value << 17u) | (value >> 47u);
-}
-
-fn random_sodium2(seed_input: u64) -> i32 {
+fn xoroshiro(seed_input: u64) -> i32 {
     var low = seed_input ^ 7640891576956012809lu;
     var high = low + u64(-7046029254386353131li);
     low = stafford_mix13(low);
     high = stafford_mix13(high);
-    return i32(rotate_left_17(low + high) + low);
+    let sum = low + high;
+    return i32(((sum << 17u) | (sum >> 47u)) + low);
 }
 
 fn texture_variant(x: i32, y: i32, z: i32) -> u32 {
     // Keep this mapping synchronized with TextureAlgorithm's repr in Rust.
     if TEXTURE_ALGORITHM == 0u {
-        return absolute_modulo_16(coordinate_random_legacy(x, y, z) >> 16u);
+        return absolute_modulo_16(coord_seed_legacy(x, y, z));
     }
-    let seed = coordinate_random_raw(x, y, z) >> 16u;
+    let seed = coord_seed(x, y, z);
     if TEXTURE_ALGORITHM == 1u {
-        return absolute_modulo_16(random_vanilla2(seed));
+        return absolute_modulo_16(java_next_long(seed));
     }
     if TEXTURE_ALGORITHM == 2u {
-        return random_vanilla3_16(seed);
+        return java_next_int_16(seed);
     }
     if TEXTURE_ALGORITHM == 3u {
-        return absolute_modulo_16(random_sodium1(u64(seed)));
+        return absolute_modulo_16(murmurhash3(u64(seed)));
     }
-    return absolute_modulo_16(random_sodium2(u64(seed)));
+    return absolute_modulo_16(xoroshiro(u64(seed)));
 }
 
 @compute @workgroup_size(16, 1, 16)

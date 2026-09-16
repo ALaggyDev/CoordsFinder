@@ -215,11 +215,12 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "coordsfinder"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "bytemuck",
  "clap",
  "ctrlc",
+ "lower",
  "pollster",
  "wgpu",
 ]
@@ -505,6 +506,26 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "lower"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9faac1cfe5c3c955d3caa12e501034062890c67c7dd756eedfcf38709eb917d9"
+dependencies = [
+ "lower-macros",
+]
+
+[[package]]
+name = "lower-macros"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c6719f7ce86cb0dff1e1fb32e9f654433e9588f7d96d2f0b06c8676ab5054a6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "naga"
