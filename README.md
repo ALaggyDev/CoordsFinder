@@ -69,7 +69,7 @@ For example, to select the CPU backend explicitly and use eight worker threads:
 coordsfinder --backend cpu --threads 8 ./example.conf
 ```
 
-Only matches are written to standard output. Device information, progress, and completion status are written to standard error, so match output can be redirected safely. Use `--output matches.txt` to also save matches to a file; without it, the program warns that matches are only on standard output. Press Ctrl+C to stop; CPU workers poll between X/Z columns and the GPU backend stops after its active tile.
+Matches are written to standard output as they are found and repeated in a final coordinate summary when the scan finishes or is cancelled. Device information, progress, and completion status are written to standard error. Use `--output matches.txt` to also save each match once to a file; without it, the program warns that matches are only on standard output. Press Ctrl+C to stop; CPU workers poll between X/Z columns and the GPU backend stops after its active tile.
 
 ## Search config
 

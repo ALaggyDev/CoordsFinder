@@ -16,6 +16,7 @@ use coordsfinder::cpu::CpuScanner;
 use coordsfinder::filter::prepare_filters;
 use coordsfinder::gpu::GpuScanner;
 use coordsfinder::scan::{ScanPlan, make_plan};
+use coordsfinder::types::Match;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Backend {
@@ -72,6 +73,7 @@ struct Reporter {
     started: Instant,
     last_progress: Mutex<Instant>,
     matches: AtomicU64,
+    found: Mutex<Vec<Match>>,
     total_items: usize,
     verbose: bool,
     output: Option<Mutex<File>>,
@@ -100,6 +102,7 @@ impl Reporter {
             started,
             last_progress: Mutex::new(started),
             matches: AtomicU64::new(0),
+            found: Mutex::new(Vec::new()),
             total_items,
             verbose,
             output,
@@ -111,6 +114,7 @@ impl Reporter {
             .fetch_add(matches.len() as u64, Ordering::Relaxed);
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
+        self.found.lock().unwrap().extend_from_slice(matches);
         for found in matches {
             writeln!(
                 stdout,
@@ -131,6 +135,27 @@ impl Reporter {
                     .flush()
                     .expect("could not flush match to output file");
             }
+        }
+    }
+
+    /// Repeats all collected coordinates after scanning has stopped.
+    fn report_summary(&self) {
+        let found = self.found.lock().unwrap();
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        writeln!(
+            stdout,
+            "========== {} coordinates found ==========",
+            found.len()
+        )
+        .expect("could not write summary to stdout");
+        for found in found.iter() {
+            writeln!(
+                stdout,
+                "Found with {} mismatch(es)! ({}, {}, {}), direction {}",
+                found.mismatches, found.x, found.y, found.z, found.direction
+            )
+            .expect("could not write summary match to stdout");
         }
     }
 
@@ -292,12 +317,14 @@ fn run(options: Options) -> Result<ExitCode, String> {
     let elapsed = reporter.started.elapsed().as_secs_f64();
     if cancelled.load(Ordering::Relaxed) {
         eprintln!("Scan cancelled after {elapsed:.2} seconds.");
+        reporter.report_summary();
         return Ok(ExitCode::from(130));
     }
     eprintln!(
         "All done in {elapsed:.2} seconds ({} match(es)).",
         reporter.matches.load(Ordering::Relaxed)
     );
+    reporter.report_summary();
     Ok(ExitCode::SUCCESS)
 }
 
