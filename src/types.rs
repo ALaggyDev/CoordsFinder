@@ -53,6 +53,15 @@ pub struct Int3 {
     pub z: i32,
 }
 
+/// Visible block displacement, expressed as seed nibbles (0..=15).
+/// `None` leaves an axis unknown; Y is always sampled at world Y=0.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OffsetInfo {
+    pub position: Int3,
+    pub nibbles: [Option<u8>; 3],
+    pub dripstone: bool,
+}
+
 /// One of Minecraft's six world-facing block faces.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(u8)]

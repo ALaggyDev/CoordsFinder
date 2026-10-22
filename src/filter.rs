@@ -229,7 +229,10 @@ pub fn prepare_filters(
                 "filter contains more than {MAX_FILTER_COUNT} unique usable block offsets"
             ));
         }
-        if compiled.constraints.is_empty() && compiled.forced_errors <= error_tolerance {
+        if !observations.is_empty()
+            && compiled.constraints.is_empty()
+            && compiled.forced_errors <= error_tolerance
+        {
             return Err(
                 "filter has no usable block constraints after combining observations".to_owned(),
             );

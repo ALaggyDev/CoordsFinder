@@ -39,6 +39,8 @@ impl CpuScanner {
     }
 
     /// Runs the plan and reports completed work at tile boundaries.
+    /// With block offsets, uses a separate bit lifting traversal instead of the
+    /// tile plan; progress then counts low-16-bit roots and X work items.
     pub fn scan(
         &self,
         config: &ScanConfig,
@@ -47,6 +49,9 @@ impl CpuScanner {
         progress: impl FnMut(u64, usize) + Send,
         cancelled: impl Fn() -> bool + Sync,
     ) -> Result<(), String> {
+        if !config.offsets.is_empty() {
+            return crate::offset::scan(self.threads, config, sink, progress, cancelled);
+        }
         // Runtime selection happens exactly once; run_mode is specialized for A.
         match config.algorithm {
             TextureAlgorithm::Vanilla1 => {
@@ -135,7 +140,7 @@ impl CpuScanner {
 }
 
 #[inline(always)]
-fn count_mismatches<A: TextureSampler>(
+pub(crate) fn count_mismatches<A: TextureSampler>(
     x: i32,
     y: i32,
     z: i32,

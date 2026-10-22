@@ -49,11 +49,19 @@ CPU scanner        GPU scanner
 | `src/texture.rs` | Minecraft and Sodium texture random functions |
 | `src/scan.rs` | Linear, spiral, and reverse-spiral tile planning |
 | `src/cpu.rs` | Multithreaded CPU scanner |
+| `src/offset.rs` | CPU bit lifting for block offsets, clipping, and surviving texture checks |
 | `src/gpu.rs` | wgpu setup, GPU dispatch, and result downloads |
 | `src/search.wgsl` | GPU search code |
 
 `src/lib.rs` exports the library modules. `src/main.rs` builds the command-line
 program from those modules.
+
+Configs with `[offsets]` use the CPU bit lifting traversal instead of the tile
+plan. It enumerates low 16-bit X/Z pairs, then extends them to 28 bits while
+checking the seed nibble prefixes and range bounds. Clipped dripstone endpoints
+keep all equivalent nibbles. Offset seeds ignore Y; optional texture filters
+check each surviving X/Z over the configured Y range. Offset constraints are
+exact, and texture filters retain their usual error tolerance.
 
 ## Config parsing
 

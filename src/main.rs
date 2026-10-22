@@ -32,7 +32,7 @@ enum Backend {
 #[command(
     name = "CoordsFinder",
     version = VERSION,
-    about = "Crack Minecraft coordinates from texture rotations!",
+    about = "Crack Minecraft coordinates from texture rotations and block offsets!",
     disable_version_flag = true,
     arg_required_else_help = true
 )]
@@ -159,7 +159,7 @@ impl Reporter {
         }
     }
 
-    fn report_progress(&self, candidates: u64, completed: usize) {
+    fn report_progress(&self, candidates: u64, completed: usize, unit: &str) {
         let now = Instant::now();
         let mut last = self.last_progress.lock().unwrap();
         if !self.verbose && now.duration_since(*last) < Duration::from_secs(1) {
@@ -168,7 +168,7 @@ impl Reporter {
         let elapsed = self.started.elapsed().as_secs_f64();
         let average_item_seconds = elapsed / completed.max(1) as f64;
         eprintln!(
-            "Progress: {completed}/{} work items, {:.3} M candidates/s, {:.3} s/work item, {} match(es).",
+            "Progress: {completed}/{} work items, {:.3} M {unit}/s, {:.3} s/work item, {} match(es).",
             self.total_items,
             candidates as f64 / elapsed / 1_000_000.0,
             average_item_seconds,
@@ -209,6 +209,12 @@ fn select_scanner(
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(automatic_threads);
+    if !config.offsets.is_empty() {
+        return match options.backend {
+            Backend::Gpu => Err("block offset searches require --backend cpu or auto".to_owned()),
+            _ => CpuScanner::new(threads).map(Scanner::Cpu),
+        };
+    }
     match options.backend {
         Backend::Cpu => CpuScanner::new(threads).map(Scanner::Cpu),
         Backend::Gpu => GpuScanner::new(config).map(|scanner| Scanner::Gpu(Box::new(scanner))),
@@ -224,6 +230,10 @@ fn select_scanner(
 
 fn run(options: Options) -> Result<ExitCode, String> {
     let config = load(&options.config)?;
+    let has_offsets = !config.offsets.is_empty();
+    if has_offsets && options.backend == Backend::Gpu {
+        return Err("block offset searches require --backend cpu or auto".to_owned());
+    }
     let prepared = prepare_filters(
         &config.filter,
         config.algorithm,
@@ -239,10 +249,11 @@ fn run(options: Options) -> Result<ExitCode, String> {
         ScanOrder::ReverseSpiral => "reverse-spiral",
     };
     let loaded = format!(
-        "Loaded {} with {} filter(s), {} block constraint(s), and {} direction(s).",
+        "Loaded {} with {} texture filter(s), {} texture block constraint(s), {} offset observation(s), and {} direction(s).",
         config.source_path.display(),
         config.filter.len(),
         prepared.directions[0].constraints.len() + prepared.directions[0].forced_errors as usize,
+        config.offsets.len(),
         config.directions.len()
     );
     if options.validate {
@@ -255,10 +266,17 @@ fn run(options: Options) -> Result<ExitCode, String> {
 
     // Validation covers both tile configurations without requiring a GPU.
     if options.validate {
-        let cpu_plan = make_plan(&config, config.cpu_tile_size)?;
-        let gpu_plan = make_plan(&config, config.gpu_tile_size)?;
-        print_plan("CPU", &cpu_plan, true);
-        print_plan("GPU", &gpu_plan, true);
+        if has_offsets {
+            println!(
+                "CPU bit lifting: {} low-16-bit X work items; lifts to 28 bits. Tile sizes and scanOrder do not apply.",
+                coordsfinder::offset::work_items(&config)
+            );
+        } else {
+            let cpu_plan = make_plan(&config, config.cpu_tile_size)?;
+            let gpu_plan = make_plan(&config, config.gpu_tile_size)?;
+            print_plan("CPU", &cpu_plan, true);
+            print_plan("GPU", &gpu_plan, true);
+        }
         println!("Config and backend plans are valid.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -272,7 +290,14 @@ fn run(options: Options) -> Result<ExitCode, String> {
     let scanner = select_scanner(&options, &config)?;
     let tile_size = match &scanner {
         Scanner::Cpu(scanner) => {
-            eprintln!("Backend: CPU ({} threads).", scanner.threads());
+            if has_offsets {
+                eprintln!(
+                    "Backend: CPU bit lifting ({} threads); tile sizes and scanOrder do not apply.",
+                    scanner.threads()
+                );
+            } else {
+                eprintln!("Backend: CPU ({} threads).", scanner.threads());
+            }
             config.cpu_tile_size
         }
         Scanner::Gpu(scanner) => {
@@ -289,27 +314,39 @@ fn run(options: Options) -> Result<ExitCode, String> {
         Scanner::Cpu(_) => "CPU",
         Scanner::Gpu(_) => "GPU",
     };
-    print_plan(plan_label, &plan, false);
+    let total_items = if has_offsets {
+        let total = coordsfinder::offset::work_items(&config);
+        eprintln!("CPU bit lifting: {total} low-16-bit X work items; lifts to 28 bits.");
+        total
+    } else {
+        print_plan(plan_label, &plan, false);
+        plan.total_items()
+    };
+    let progress_unit = if has_offsets {
+        "seed prefixes"
+    } else {
+        "candidates"
+    };
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&cancelled);
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
         .map_err(|error| format!("could not install interrupt handler: {error}"))?;
 
-    let reporter = Reporter::new(plan.total_items(), config.verbose, options.output.as_ref())?;
+    let reporter = Reporter::new(total_items, config.verbose, options.output.as_ref())?;
     match scanner {
         Scanner::Cpu(scanner) => scanner.scan(
             &config,
             &plan,
             |matches| reporter.report_matches(matches),
-            |candidates, completed| reporter.report_progress(candidates, completed),
+            |candidates, completed| reporter.report_progress(candidates, completed, progress_unit),
             || cancelled.load(Ordering::Relaxed),
         )?,
         Scanner::Gpu(scanner) => scanner.scan(
             &config,
             &plan,
             |matches| reporter.report_matches(matches),
-            |candidates, completed| reporter.report_progress(candidates, completed),
+            |candidates, completed| reporter.report_progress(candidates, completed, progress_unit),
             || cancelled.load(Ordering::Relaxed),
         )?,
     }

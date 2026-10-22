@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::filter::{prepare_filters, rotate_xz};
-use crate::types::{Face, RotationInfo, TextureAlgorithm};
+use crate::types::{Face, Int3, OffsetInfo, RotationInfo, TextureAlgorithm};
 
 /// A half-open integer range used for one scan axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +48,7 @@ pub struct ScanConfig {
     pub gpu_tile_size: TileSize,
     pub verbose: bool,
     pub filter: Vec<RotationInfo>,
+    pub offsets: Vec<OffsetInfo>,
     pub source_path: PathBuf,
 }
 
@@ -65,6 +66,7 @@ impl Default for ScanConfig {
             gpu_tile_size: TileSize { x: 8192, z: 8192 },
             verbose: false,
             filter: Vec::new(),
+            offsets: Vec::new(),
             source_path: PathBuf::new(),
         }
     }
@@ -189,11 +191,63 @@ fn line_error(path: &Path, line: usize, message: impl std::fmt::Display) -> Stri
     format!("{}:{line}: {message}", path.display())
 }
 
+fn parse_offset(value: &str) -> Result<OffsetInfo, String> {
+    let (position, nibbles) = value
+        .split_once('|')
+        .ok_or("offset rows must be: x y z | offx offy offz [dripstone]")?;
+    let position = position
+        .split_whitespace()
+        .map(str::parse::<i32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "offset positions must fit in signed 32-bit integers")?;
+    if position.len() != 3 {
+        return Err("offset rows must contain three block coordinates".to_owned());
+    }
+    let tokens: Vec<_> = nibbles.split_whitespace().collect();
+    let dripstone = tokens
+        .get(3)
+        .is_some_and(|s| s.eq_ignore_ascii_case("dripstone"));
+    if tokens.len() != 3 && !(tokens.len() == 4 && dripstone) {
+        return Err("expected offx offy offz [dripstone]; use * for an unknown axis".to_owned());
+    }
+    let mut nibbles = [None; 3];
+    for (axis, token) in tokens[..3].iter().enumerate() {
+        if *token != "*" {
+            nibbles[axis] = Some(
+                token
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|n| *n < 16)
+                    .ok_or("offset nibbles must be 0..15 or *")?,
+            );
+        }
+    }
+    if nibbles.iter().all(Option::is_none) {
+        return Err("offset row must constrain at least one axis".to_owned());
+    }
+    if dripstone && nibbles[1].is_some() {
+        return Err("dripstone has no vertical offset; use * for offy".to_owned());
+    }
+    Ok(OffsetInfo {
+        position: Int3 {
+            x: position[0],
+            y: position[1],
+            z: position[2],
+        },
+        nibbles,
+        dripstone,
+    })
+}
+
 /// Loads, parses, and validates a scan configuration file.
 pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
     let path = path.as_ref();
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    parse(&contents, path)
+}
+
+fn parse(contents: &str, path: &Path) -> Result<ScanConfig, String> {
     let mut config = ScanConfig {
         source_path: path.to_owned(),
         ..ScanConfig::default()
@@ -213,7 +267,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
             .and_then(|text| text.strip_suffix(']'))
         {
             section = compact_name(name);
-            if section != "filter" && section != "scan" && section != "settings" {
+            if !matches!(section.as_str(), "filter" | "offsets" | "scan" | "settings") {
                 return Err(line_error(
                     path,
                     line_number,
@@ -226,6 +280,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
             config
                 .filter
                 .push(parse_filter(line).map_err(|error| line_error(path, line_number, error))?);
+            continue;
+        }
+        if section == "offsets" {
+            config
+                .offsets
+                .push(parse_offset(line).map_err(|error| line_error(path, line_number, error))?);
             continue;
         }
 
@@ -285,7 +345,15 @@ pub fn load(path: impl AsRef<Path>) -> Result<ScanConfig, String> {
         result.map_err(|error| line_error(path, line_number, error))?;
     }
 
+    let offsets_only = config.filter.is_empty() && !config.offsets.is_empty();
+    // Offsets cannot resolve height, so report each X/Z once when Y is omitted.
+    if offsets_only && !seen.contains("yrange") {
+        config.y_range = IntRange { start: 0, end: 1 };
+    }
     for required in ["algorithm", "xrange", "yrange", "zrange", "errortolerance"] {
+        if offsets_only && matches!(required, "algorithm" | "yrange" | "errortolerance") {
+            continue;
+        }
         if !seen.contains(required) {
             return Err(format!(
                 "{}: missing required setting {required}",
@@ -315,8 +383,8 @@ fn validate(config: &ScanConfig) -> Result<(), String> {
     if config.error_tolerance < 0 {
         return Err("errorTolerance must be non-negative".to_owned());
     }
-    if config.filter.is_empty() {
-        return Err("filter must contain at least one row".to_owned());
+    if config.filter.is_empty() && config.offsets.is_empty() {
+        return Err("filter or offsets must contain at least one row".to_owned());
     }
     for &direction in &config.directions {
         for filter in &config.filter {
@@ -334,6 +402,9 @@ fn validate(config: &ScanConfig) -> Result<(), String> {
         &config.directions,
         config.error_tolerance,
     )?;
+    if !config.offsets.is_empty() {
+        crate::offset::prepare(config)?;
+    }
     Ok(())
 }
 
@@ -364,6 +435,77 @@ mod tests {
         assert_eq!(parsed, RotationInfo::netherrack(1, -2, 3, 3, Face::West));
         assert!(parse_filter("0 0 0 | 4 netherrack-up").is_err());
         assert!(parse_filter("0 0 0 | 0 netherrack").is_err());
+    }
+
+    #[test]
+    fn parses_partial_xyz_and_dripstone_offsets() {
+        let config =
+            load(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/offsets.conf")).unwrap();
+        assert!(config.filter.is_empty());
+        assert_eq!(config.y_range, IntRange { start: 0, end: 1 });
+        assert_eq!(config.error_tolerance, 0);
+        assert_eq!(config.offsets.len(), 5);
+        assert_eq!(config.offsets[0].nibbles, [Some(11), Some(11), Some(5)]);
+        let partial = parse_offset("300 -9 -400 | 3 * 12 dripstone").unwrap();
+        assert_eq!(
+            partial.position,
+            Int3 {
+                x: 300,
+                y: -9,
+                z: -400
+            }
+        );
+        assert_eq!(partial.nibbles, [Some(3), None, Some(12)]);
+        assert!(partial.dripstone);
+        for row in [
+            "0 0 | 1 * 2",
+            "0 0 0 | 16 * 2",
+            "0 0 0 | -1 * 2",
+            "0 0 0 | * * *",
+            "0 0 0 | 1 2 3 dripstone",
+            "0 0 0 | 1 * 2 flower",
+            "0 0 0 | 1 *",
+            "0 0 0 | 1 * 2 dripstone extra",
+        ] {
+            assert!(parse_offset(row).is_err(), "{row}");
+        }
+    }
+
+    #[test]
+    fn offset_only_settings_remain_optional_and_overridable() {
+        let settings = "xRange = (0, 1)\nzRange = (0, 1)\n";
+        let offsets = "[offsets]\n0 0 0 | 0 * 0\n";
+        let path = Path::new("test.conf");
+        let config = parse(&format!("{settings}{offsets}"), path).unwrap();
+        assert_eq!(config.algorithm, TextureAlgorithm::Vanilla3);
+        let config = parse(
+            &format!(
+                "{settings}algorithm = Sodium-2\nyRange = (-4, -2)\nerrorTolerance = 2\n{offsets}"
+            ),
+            path,
+        )
+        .unwrap();
+        assert_eq!(config.algorithm, TextureAlgorithm::Sodium2);
+        assert_eq!(config.y_range, IntRange { start: -4, end: -2 });
+        assert_eq!(config.error_tolerance, 2);
+
+        // Texture-only and mixed searches still require all texture settings.
+        for observations in [
+            "[filter]\n0 0 0 | 0\n".to_owned(),
+            format!("{offsets}[filter]\n0 0 0 | 0\n"),
+        ] {
+            for (setting, missing) in [
+                ("yRange = (0, 1)\nerrorTolerance = 0\n", "algorithm"),
+                ("algorithm = Vanilla-3\nerrorTolerance = 0\n", "yrange"),
+                ("algorithm = Vanilla-3\nyRange = (0, 1)\n", "errortolerance"),
+            ] {
+                assert!(
+                    parse(&format!("{settings}{setting}{observations}"), path)
+                        .unwrap_err()
+                        .contains(&format!("missing required setting {missing}"))
+                );
+            }
+        }
     }
 
     #[test]

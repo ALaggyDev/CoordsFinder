@@ -1,16 +1,18 @@
 # CoordsFinder
 
-CoordsFinder is the fastest Minecraft texture rotation cracker for cracking coordinates from a screenshot!
+CoordsFinder is the fastest Minecraft texture rotation & block offset cracker for cracking coordinates from a screenshot!
 
 CoordsFinder is written in Rust and includes a portable multithreaded CPU backend and a [wgpu](https://wgpu.rs/) compute backend, so one build works across CPU-only systems, Vulkan, DirectX 12, and Metal.
+
+Update: (Web)CoordsFinder has a new search mode - Block offsets! Block offset searches use fanda857 and epic10l2's [fast bit lifting algorithm](./docs/fast_bit_lifting.rs), with support for dripstone clipping and optional texture rotations. The algorithm can find all matching coordinates in a 60 million block world in about 10 seconds!
 
 Check out my video on YouTube!
 
 Links:
 
-- [YouTube Video](https://www.youtube.com/watch?v=gXTN9DD_Cp0)
-- [WebCoordsFinder](https://github.com/ALaggyDev/WebCoordsFinder)
-- [Colab Notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing)
+-   [YouTube Video](https://www.youtube.com/watch?v=gXTN9DD_Cp0)
+-   [WebCoordsFinder](https://github.com/ALaggyDev/WebCoordsFinder)
+-   [Colab Notebook](https://colab.research.google.com/drive/17qih1n6VpQx_77C2spIF-JOJp17y9Jt6?usp=sharing)
 
 If you like this project, please star it on GitHub and share it with your friends!
 
@@ -32,8 +34,8 @@ The CPU backend has no additional runtime requirements. The optional GPU backend
 
 Requirements:
 
-- Rust 1.87 or newer
-- A supported GPU and driver if you want to use the optional GPU backend
+-   Rust 1.87 or newer
+-   A supported GPU and driver if you want to use the optional GPU backend
 
 Build and test:
 
@@ -124,9 +126,9 @@ Select the texture algorithm in the config. If unsure, use `Vanilla-3` as a safe
 
 Scan order determines the order in which tiles are scanned.
 
-- `linear` starts from the minimum X/Z corner and moves to the maximum X/Z corner.
-- `spiral` begins at the center and scans in a clockwise spiral pattern.
-- `reverse-spiral` scans the same spiral path in reverse, from the outside inward.
+-   `linear` starts from the minimum X/Z corner and moves to the maximum X/Z corner.
+-   `spiral` begins at the center and scans in a clockwise spiral pattern.
+-   `reverse-spiral` scans the same spiral path in reverse, from the outside inward.
 
 ### Directions
 
@@ -177,28 +179,74 @@ x y z | variant netherrack-<face>
 The first three numbers are the relative block coordinates to an origin. The fourth number is the visible texture rotation.
 
 Depending on the type of block faces, additional keywords need to be used:
-- For ordinary rotated blocks (e.g., grass block, dirt, stone, etc.), no additional keywords are needed.
-- For side faces on mirrored blocks (e.g., stone, deepslate), the `side` keyword are used to indicate that the filter is a side face.
-- For netherrack, the `netherrack-<face>` keyword is used to indicate the direction of the face. The `<face>` can be one of `up`, `down`, `north`, `south`, `east`, or `west`.
+
+-   For ordinary rotated blocks (e.g., grass block, dirt, stone, etc.), no additional keywords are needed.
+-   For side faces on mirrored blocks (e.g., stone, deepslate), the `side` keyword are used to indicate that the filter is a side face.
+-   For netherrack, the `netherrack-<face>` keyword is used to indicate the direction of the face. The `<face>` can be one of `up`, `down`, `north`, `south`, `east`, or `west`.
 
 Multiple filters on the same block offset are merged into one block constraint to improve performance.
+
+### Block offsets
+
+Add an `[offsets]` section to search from the visible displacement of flowers,
+grass, pointed dripstone, and other blocks with random model offsets:
+
+```ini
+[offsets]
+# Relative block position | X Y Z seed nibbles [dripstone]
+2 0 -1 | 11 * 5
+1 0 0 | 3 2 15
+3 0 -2 | 3 * 12 dripstone
+```
+
+Each displacement is expressed as a seed nibble from `0` to `15`, matching the
+offset sliders in WebCoordsFinder. Use `*` for an unknown axis, including Y for
+blocks that only shift horizontally. Block positions are signed 32-bit offsets
+from the candidate origin. `[filter]` may be omitted. For offset-only searches,
+`yRange` and `errorTolerance` are optional and default to `(0, 1)` and `0`.
+`algorithm` is also optional because it only affects texture filters; `xRange`
+and `zRange` are still required. Searches with texture filters still require
+`algorithm`, `yRange`, and `errorTolerance`.
+
+The horizontal displacement is `((n / 15.0f) - 0.5) * 0.5` blocks. With the
+`dripstone` marker, it is clipped to ±0.125 blocks: nibbles `0`–`3` are equivalent,
+as are `12`–`15`. All equivalent seeds are accepted throughout lifting.
+
+Directions rotate both block positions and observed displacements.
+Offset observations must match exactly; `errorTolerance` applies to texture
+filters only. When both sections are present, textures are checked only at
+X/Z positions that satisfy the offsets.
+
+Offset searches use the [fast bit lifting algorithm](./docs/fast_bit_lifting.rs).
+It can find all matching coordinates in a 60 million block world in about 10 seconds.
+The algorithm is very fast because it lifts the bits of XZ coordinates bit by bit
+using a Hensel-style bit lifting.
+
+Offsets alone cannot determine the origin's Y coordinate. By default, each X/Z
+is reported once with `?` for the unknown Y coordinate. Offset-only searches
+ignore `yRange`, including when it is explicitly set.
+Add texture filters to resolve height.
+`algorithm` selects the texture algorithm and does not affect
+offsets. A runnable full XYZ example is included in
+[`examples/Block offsets.conf`](./examples/Block%20offsets.conf).
 
 ## Speed
 
 Benchmark setup:
-- Benchmark config: [`benchmark.conf`](./examples/benchmark.conf)
-- Search area: -225000 to 225000 in X/Z, -60 to 0 in Y (Donut SMP area)
-- Error tolerance: 0
-- CPU: AMD Ryzen AI 9 365 (10 cores, 20 threads)
-- GPU: NVIDIA RTX 5080 Laptop
-- OS: Windows 11, on MSVC
+
+-   Benchmark config: [`benchmark.conf`](./examples/benchmark.conf)
+-   Search area: -225000 to 225000 in X/Z, -60 to 0 in Y (Donut SMP area)
+-   Error tolerance: 0
+-   CPU: AMD Ryzen AI 9 365 (10 cores, 20 threads)
+-   GPU: NVIDIA RTX 5080 Laptop
+-   OS: Windows 11, on MSVC
 
 EDIT: Several performance improvements were made, benchmark results are now updated!
 
-|                     | CPU (1 thread)  | CPU (20 threads) | GPU (Vulkan)    |
-| ------------------- | --------------- | ---------------- | --------------- |
-| Peak position/sec   | 188M            | 2,180M           | **155,000M!**      |
-| Estimated time      | 17 hours 57 mins | 1 hours 33 mins  | **1 mins 18 secs!** |
+|                   | CPU (1 thread)   | CPU (20 threads) | GPU (Vulkan)        |
+| ----------------- | ---------------- | ---------------- | ------------------- |
+| Peak position/sec | 188M             | 2,180M           | **155,000M!**       |
+| Estimated time    | 17 hours 57 mins | 1 hours 33 mins  | **1 mins 18 secs!** |
 
 ## FAQs
 
@@ -206,36 +254,40 @@ EDIT: Several performance improvements were made, benchmark results are now upda
 
 Here's a list of blocks that have "texture rotations", as of Minecraft 1.21.11. Note that I may have missed some blocks, and not all of them have been tested.
 
-- Grass block
-- Rooted Dirt
-- Dirt
-- Dirt path
-- Stone & Infested stone, with side face variants
-- Deepslate & Infested deepslate, with side face variants
-- Bedrock, with side face variants
-- Sculk, with side face variants
-- Podzol
-- Mycelium
-- Sand
-- Red sand
-- All 16 colors of concrete powder
-- Lily pad
-- Sea pickle?
-- Turtle egg?
-- Netherrack
+-   Grass block
+-   Rooted Dirt
+-   Dirt
+-   Dirt path
+-   Stone & Infested stone, with side face variants
+-   Deepslate & Infested deepslate, with side face variants
+-   Bedrock, with side face variants
+-   Sculk, with side face variants
+-   Podzol
+-   Mycelium
+-   Sand
+-   Red sand
+-   All 16 colors of concrete powder
+-   Lily pad
+-   Sea pickle?
+-   Turtle egg?
+-   Netherrack
 
-Flower random offsets are not part of the texture rotation algorithm (block variant model) but are instead hard-coded into the game. I will be looking into it in the future.
+### Which blocks have random block offsets?
+
+All grass, flowers, bamboo, dripstone and other similar blocks have random block offsets.
+
+Unlike texture rotations, block offsets can be scanned efficiently with the fast bit lifting algorithm - we can find all matching coordinates in a 60 million block world in about 10 seconds!
 
 ### How does texture rotation cracking even work?
 
 I will spare my words here and instead link to these amazing resources that explain the concept in detail:
 
-- [Texture Rotation Reverser Java](https://github.com/19MisterX98/TextureRotations) by 19MisterX98
-- [Texture Exploit Guide](https://gitea.com/ChromeCrusher/Texploit-Guide) by ChromeCrusher
+-   [Texture Rotation Reverser Java](https://github.com/19MisterX98/TextureRotations) by 19MisterX98
+-   [Texture Exploit Guide](https://gitea.com/ChromeCrusher/Texploit-Guide) by ChromeCrusher
 
 ### What is the difference between WebCoordsFinder and CoordsFinder?
 
-WebCoordsFinder is a web-based app. It allows users to upload a screenshot, draw the grid, mark the texture rotations, and either perform the scan on the app or download a config file to use in CoordsFinder. It is a convenient way to generate a config file without having to painstakingly mark and write it by hand.
+WebCoordsFinder is a web-based app. It allows users to upload a screenshot, draw the grid, mark the texture rotations or block offsets, and either perform the scan on the app or download a config file to use in CoordsFinder. It is a convenient way to generate a config file without having to painstakingly mark and write it by hand.
 
 CoordsFinder is a command-line tool that performs the actual brute-force search. It supports multithreaded CPU scanning and GPU acceleration through wgpu, and is much faster than the built-in WebCoordsFinder scanner on supported hardware.
 
@@ -253,9 +305,9 @@ Windows can reset the graphics driver when one GPU work item runs for too long; 
 
 It is fast because:
 
-- It is written in Rust, which is a compiled language with predictable performance.
-- It uses multithreading on the CPU and compute shaders on the GPU to massively parallelize the search.
-- The search implementations avoid unnecessary work in their inner loops and share precomputed scan data across candidates.
+-   It is written in Rust, which is a compiled language with predictable performance.
+-   It uses multithreading on the CPU and compute shaders on the GPU to massively parallelize the search.
+-   The search implementations avoid unnecessary work in their inner loops and share precomputed scan data across candidates.
 
 Optimization improvements and suggestions are very much appreciated!
 
@@ -271,8 +323,8 @@ TLDR: The project creator (which is me, Laggy) is a person who **learned to code
 
 AI-generated PRs are allowed, with the following requirements:
 
-- Please review the code and write the PR description yourself (as a **human**). You should understand your code and are responsible for your code.
-- Keep the code change minimal and scoped as much as possible.
-- Avoid optimizations that make the code hard or impossible to read.
-- "Premature optimization is the root of all evil." I hope you understand what this phrase means.
-- Please don't flood the repos with meaningless PRs.
+-   Please review the code and write the PR description yourself (as a **human**). You should understand your code and are responsible for your code.
+-   Keep the code change minimal and scoped as much as possible.
+-   Avoid optimizations that make the code hard or impossible to read.
+-   "Premature optimization is the root of all evil." I hope you understand what this phrase means.
+-   Please don't flood the repos with meaningless PRs.

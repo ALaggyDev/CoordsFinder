@@ -28,6 +28,9 @@ struct ShaderSpecialization {
 
 impl ShaderSpecialization {
     fn new(config: &ScanConfig) -> Result<Self, String> {
+        if !config.offsets.is_empty() {
+            return Err("block offset searches require the CPU backend".to_owned());
+        }
         prepare_filters(
             &config.filter,
             config.algorithm,
@@ -104,6 +107,10 @@ pub struct GpuScanner {
 impl GpuScanner {
     /// Initializes a compute device and compiles a pipeline for `config`.
     pub fn new(config: &ScanConfig) -> Result<Self, String> {
+        // Reject before requesting an adapter, including on CPU-only systems.
+        if !config.offsets.is_empty() {
+            return Err("block offset searches require the CPU backend".to_owned());
+        }
         pollster::block_on(Self::new_async(config))
     }
 
